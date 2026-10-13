@@ -11,6 +11,7 @@ Run layout:
 from __future__ import annotations
 
 import json
+import os
 import pathlib
 import shutil
 import subprocess
@@ -25,11 +26,73 @@ class WorkspaceError(Exception):
 
 
 def _git(repo: pathlib.Path, *args: str, check: bool = True) -> subprocess.CompletedProcess:
+    kwargs: Dict[str, Any] = {}
+    if os.name == "nt":
+        # git.exe shares the parent console by default. A fatal worktree
+        # error delivers CTRL_C_EVENT to that console and aborts the suite
+        # with KeyboardInterrupt. A windowless process cannot do that.
+        kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
     result = subprocess.run(["git", "-C", str(repo), *args],
-                            capture_output=True, text=True)
+                            capture_output=True, text=True, **kwargs)
     if check and result.returncode != 0:
         raise WorkspaceError(f"git {' '.join(args)} failed: {result.stderr.strip()}")
     return result
+
+
+def _is_worktree(path: pathlib.Path) -> bool:
+    if not path.is_dir() or not (path / ".git").exists():
+        return False
+    result = _git(path, "rev-parse", "--is-inside-work-tree", check=False)
+    return result.returncode == 0 and result.stdout.strip() == "true"
+
+
+def _admin_is_stale(admin: pathlib.Path) -> bool:
+    pointer = admin / "gitdir"
+    if not pointer.is_file():
+        return True
+    recorded = pointer.read_text(encoding="utf-8", errors="replace").strip()
+    return not pathlib.Path(recorded).exists()
+
+
+def _link_worktree(repo: pathlib.Path, worktree: pathlib.Path) -> None:
+    """Detached linked worktree with an absolute forward-slash gitdir.
+
+    ``git worktree add`` on Windows can leave a gitfile that its own
+    checkout cannot reopen (``fatal: not a git repository: .../.git``),
+    for a tree nested under the main checkout in ``Temp\\tmp...``. The
+    layout matches what ``git worktree add`` writes; the pointer is an
+    absolute ``C:/...`` path so backslash escapes never apply.
+    """
+    repo = repo.resolve()
+    worktree = worktree.resolve()
+    git_dir = repo / ".git"
+    if not git_dir.is_dir():
+        raise WorkspaceError(f"{repo} has no .git directory")
+    base = git_dir / "worktrees"
+    base.mkdir(parents=True, exist_ok=True)
+    admin = base / worktree.name
+    if admin.exists() and _admin_is_stale(admin):
+        shutil.rmtree(admin, ignore_errors=True)
+    if admin.exists():
+        suffix = 1
+        while (base / f"{worktree.name}{suffix}").exists():
+            suffix += 1
+        admin = base / f"{worktree.name}{suffix}"
+    head = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    if not head:
+        raise WorkspaceError(f"{repo} has no commits to check out")
+    admin.mkdir(parents=True, exist_ok=True)
+    (admin / "commondir").write_bytes(b"../..\n")
+    (admin / "HEAD").write_bytes((head + "\n").encode("ascii"))
+    (admin / "gitdir").write_bytes((worktree.as_posix() + "/.git\n").encode("ascii"))
+    worktree.mkdir(parents=True, exist_ok=True)
+    (worktree / ".git").write_bytes(
+        ("gitdir: " + admin.as_posix() + "\n").encode("ascii"))
+    checkout = _git(worktree, "checkout", "--detach", head, check=False)
+    if checkout.returncode != 0:
+        raise WorkspaceError(
+            "could not check out linked worktree "
+            f"{worktree.as_posix()}: {(checkout.stderr or checkout.stdout).strip()}")
 
 
 def ensure_repo(root: pathlib.Path) -> None:
@@ -60,9 +123,26 @@ class RunStore:
             raise WorkspaceError(
                 f"worktree for {role!r} already exists in run {self.run_id} — "
                 "one writer per worktree is mandatory")
-        path = self.worktrees_dir / role
+        path = (self.worktrees_dir / role).resolve()
         path.parent.mkdir(parents=True, exist_ok=True)
-        _git(self.root, "worktree", "add", "--detach", str(path))
+        # Forward slashes. Git for Windows mis-reads a backslash gitdir
+        # under AppData\Local\Temp\tmp... (\t becomes a tab).
+        added = _git(self.root, "worktree", "add", "--detach", path.as_posix(),
+                     check=False)
+        if not _is_worktree(path):
+            if path.exists():
+                shutil.rmtree(path, ignore_errors=True)
+            _git(self.root, "worktree", "prune", check=False)
+            try:
+                _link_worktree(self.root, path)
+            except WorkspaceError as exc:
+                detail = (added.stderr or added.stdout or "").strip()
+                raise WorkspaceError(
+                    f"{exc}; git worktree add said: {detail}") from None
+        if not _is_worktree(path):
+            detail = (added.stderr or added.stdout or "").strip()
+            raise WorkspaceError(
+                f"git worktree add --detach {path.as_posix()} failed: {detail}")
         self._worktrees[role] = path
         return path
 

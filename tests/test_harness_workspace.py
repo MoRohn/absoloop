@@ -6,9 +6,11 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
+from absoloop_harness import workspace as ws
 from absoloop_harness.workspace import (RunStore, WorkspaceError, list_runs,
                                         prune_runs)
 
@@ -63,6 +65,37 @@ class Worktrees(unittest.TestCase):
             with self.assertRaises(WorkspaceError):
                 store.create_worktree("solo")
             store.cleanup_worktrees()
+
+    def test_relinks_when_git_worktree_add_cannot_reopen_the_gitfile(self):
+        """Git for Windows can reject the gitfile it just wrote.
+
+        The CI failure is ``fatal: not a git repository: .../grok/.git``
+        right after ``Preparing worktree``. The run must still get a real
+        detached worktree, with an absolute forward-slash gitdir.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            make_repo(root)
+            store = RunStore(root, "run-relink")
+            real = ws._git
+
+            def flaky(repo, *args, check=True):
+                if len(args) >= 2 and args[0] == "worktree" and args[1] == "add":
+                    return subprocess.CompletedProcess(
+                        ["git", *args], 128, "",
+                        "Preparing worktree (detached HEAD deadbeef)\n"
+                        "fatal: not a git repository: 'C:/Temp/example/.git'")
+                return real(repo, *args, check=check)
+
+            with mock.patch.object(ws, "_git", side_effect=flaky):
+                wt = store.create_worktree("grok")
+            self.assertEqual((wt / "hello.txt").read_text(encoding="utf-8"), "hello\n")
+            gitfile = (wt / ".git").read_text(encoding="utf-8")
+            self.assertTrue(gitfile.startswith("gitdir: "))
+            self.assertNotIn("\\", gitfile)
+            self.assertTrue(gitfile.strip().endswith("/.git/worktrees/grok"))
+            store.cleanup_worktrees()
+            self.assertFalse(wt.exists())
 
     def test_non_git_dir_fails_loudly(self):
         with tempfile.TemporaryDirectory() as tmp:
