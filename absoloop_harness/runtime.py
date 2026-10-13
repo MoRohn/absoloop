@@ -35,6 +35,10 @@ def cancel_flag_path(run_dir: pathlib.Path) -> pathlib.Path:
 def pid_alive(pid: Optional[int]) -> bool:
     if not isinstance(pid, int) or pid <= 0:
         return False
+    if os.name == "nt":
+        # os.kill(pid, 0) is CTRL_C_EVENT on Windows and hits this console.
+        from .platform_util import windows_pid_alive
+        return windows_pid_alive(pid)
     try:
         os.kill(pid, 0)
     except ProcessLookupError:
@@ -228,12 +232,6 @@ def cancel_run(run_dir: pathlib.Path) -> Dict[str, Any]:
                 "message": f"run already finished with status {status!r}",
                 "status": status}
 
-    if os.name == "nt":
-        # Cover the caller's Thread.join. The spurious SIGINT is raised
-        # when that join reacquires the GIL, after this function returns.
-        from .platform_util import shield_console_interrupt
-        shield_console_interrupt(8.0)
-
     request_cancel(run_dir)
     killed: List[Dict[str, Any]] = []
     for child in live.get("children", []):
@@ -258,14 +256,9 @@ def cancel_run(run_dir: pathlib.Path) -> Dict[str, Any]:
     if isinstance(orch_pid, int) and orch_pid != os.getpid() and pid_alive(orch_pid):
         # Soft-stop the orchestrator after children: it should observe the
         # cancelled children and finalize; if it is stuck, SIGTERM it.
-        # On Windows that TerminateProcess can still signal this console.
+        # SIGTERM on Windows is TerminateProcess, not a console event.
         try:
-            if os.name == "nt":
-                from .platform_util import child_teardown
-                with child_teardown():
-                    os.kill(orch_pid, signal.SIGTERM)
-            else:
-                os.kill(orch_pid, signal.SIGTERM)
+            os.kill(orch_pid, signal.SIGTERM)
             orch_killed = True
         except OSError:
             pass
@@ -275,13 +268,6 @@ def cancel_run(run_dir: pathlib.Path) -> Dict[str, Any]:
     live["cancelled_at"] = time.time()
     live["children"] = []
     write_live(run_dir, live)
-    if os.name == "nt":
-        # Refresh the window so it starts when the caller is about to join,
-        # and drop a SIGINT a child already tripped.
-        from .platform_util import (
-            clear_spurious_keyboard_interrupt, shield_console_interrupt)
-        shield_console_interrupt(8.0)
-        clear_spurious_keyboard_interrupt()
     return {
         "ok": True,
         "reason": "cancelled",

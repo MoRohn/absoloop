@@ -70,111 +70,64 @@ class StdioGuard(unittest.TestCase):
         self.assertEqual(stream.reconfigure.call_count, 2)
 
 
-class SigintShield(unittest.TestCase):
-    def tearDown(self):
-        pu._sigint_ignore_until = 0.0
-        pu._c_sigint_prev = None
-        pu._c_sigbreak_prev = None
-        pu._sigint_py_saved = None
-        pu._sigbreak_py_saved = None
-
-    def test_shield_ignores_sigint_until_the_join_can_finish(self):
-        with mock.patch.object(pu.os, "name", "nt"), \
-             mock.patch.object(pu, "_pyos_setsig", return_value=123) as setsig, \
-             mock.patch.object(pu.signal, "getsignal",
-                               return_value=pu.signal.default_int_handler), \
-             mock.patch.object(pu.signal, "signal") as sig, \
-             mock.patch.object(pu, "_drain_pending_keyboard_interrupt"), \
-             mock.patch.object(pu, "_arm_sigint_restore_timer") as arm, \
-             mock.patch.object(pu.threading, "current_thread",
-                               return_value=pu.threading.main_thread()):
-            pu.shield_console_interrupt(8)
-        setsig.assert_any_call(pu.signal.SIGINT, pu._SIG_IGN_PTR)
-        sig.assert_any_call(pu.signal.SIGINT, pu.signal.SIG_IGN)
-        arm.assert_called_once()
-        self.assertGreater(pu._sigint_ignore_until, 0.0)
-
-    def test_early_restore_waits_for_the_join_window(self):
-        pu._sigint_ignore_until = pu.time.monotonic() + 30.0
-        with mock.patch.object(pu, "_arm_sigint_restore_timer") as arm, \
-             mock.patch.object(pu, "_restore_python_sigint_handlers") as restore:
-            pu._restore_sigint_if_due()
-        arm.assert_called_once()
-        restore.assert_not_called()
-
-
 class WindowsChild(unittest.TestCase):
-    def test_child_is_detached_from_the_console(self):
+    def test_provider_child_is_its_own_process_group(self):
         flags = pu.windows_child_creationflags()
+        self.assertTrue(flags & 0x00000200)   # CREATE_NEW_PROCESS_GROUP
+        # Detaching the child removes the console CTRL_BREAK is sent to.
+        self.assertFalse(flags & 0x00000008)  # DETACHED_PROCESS
+        self.assertFalse(flags & 0x08000000)  # CREATE_NO_WINDOW
+
+    def test_tool_child_is_detached_from_the_console(self):
+        flags = pu.windows_detached_creationflags()
         self.assertTrue(flags & 0x00000008)   # DETACHED_PROCESS
         self.assertTrue(flags & 0x08000000)   # CREATE_NO_WINDOW
-        # A new process group still shares the console. That is the flag
-        # that turned a provider's death into KeyboardInterrupt.
         self.assertFalse(flags & 0x00000200)  # CREATE_NEW_PROCESS_GROUP
 
 
 class KillTree(unittest.TestCase):
-    def tearDown(self):
-        pu._child_teardown_depth = 0
-        pu._child_teardown_until = 0.0
-
-    def test_windows_taskkill_does_not_attach_a_console(self):
-        completed = mock.Mock(returncode=0)
+    def test_windows_break_stops_the_process_group(self):
         with mock.patch.object(pu, "is_windows", return_value=True), \
-             mock.patch.object(pu.subprocess, "run", return_value=completed) as run:
+             mock.patch.object(pu, "_windows_pid_alive", return_value=False), \
+             mock.patch.object(pu, "_terminate_pid") as terminate, \
+             mock.patch.object(pu.os, "kill") as kill, \
+             mock.patch.object(pu.subprocess, "run") as run:
             self.assertTrue(pu.kill_process_tree(4321))
-        args = run.call_args.args[0]
-        self.assertEqual(args[:5], ["taskkill", "/PID", "4321", "/T", "/F"])
-        flags = run.call_args.kwargs.get("creationflags", 0)
-        # Win32 values. subprocess.CREATE_NO_WINDOW does not exist on Linux,
-        # and this test forces the Windows branch there.
-        self.assertTrue(flags & 0x08000000)  # CREATE_NO_WINDOW
-        self.assertTrue(flags & 0x00000008)  # DETACHED_PROCESS
-        # The kill also arms the console swallow, so a late CTRL_C_EVENT
-        # cannot become KeyboardInterrupt on the main thread.
-        self.assertTrue(pu.ctrl_event_should_swallow(0))
+        kill.assert_called_once_with(4321, 1)  # CTRL_BREAK_EVENT
+        terminate.assert_not_called()
+        run.assert_not_called()
 
+    def test_windows_terminates_when_break_leaves_the_process_alive(self):
+        times = iter([0.0, 0.0, 3.0])
+        with mock.patch.object(pu, "is_windows", return_value=True), \
+             mock.patch.object(pu, "_windows_pid_alive", return_value=True), \
+             mock.patch.object(pu, "_terminate_pid", return_value=True) as terminate, \
+             mock.patch.object(pu.os, "kill") as kill, \
+             mock.patch.object(pu.subprocess, "run") as run, \
+             mock.patch.object(pu.time, "sleep"), \
+             mock.patch.object(pu.time, "monotonic", side_effect=lambda: next(times)):
+            self.assertTrue(pu.kill_process_tree(4321))
+        kill.assert_called_once_with(4321, 1)
+        terminate.assert_called_once_with(4321)
+        run.assert_not_called()
 
-class ChildTeardownCtrl(unittest.TestCase):
-    def tearDown(self):
-        pu._child_teardown_depth = 0
-        pu._child_teardown_until = 0.0
+    def test_windows_liveness_does_not_send_ctrl_c(self):
+        with mock.patch.object(pu.os, "name", "nt"), \
+             mock.patch.object(pu, "_windows_pid_alive", return_value=True) as probe, \
+             mock.patch.object(pu.os, "kill") as kill:
+            self.assertTrue(pu.windows_pid_alive(99))
+        probe.assert_called_once_with(99)
+        kill.assert_not_called()
 
-    def test_swallows_ctrl_c_and_break_only_during_teardown(self):
-        self.assertFalse(pu.ctrl_event_should_swallow(0))
-        self.assertFalse(pu.ctrl_event_should_swallow(1))
-        with pu.child_teardown():
-            self.assertTrue(pu.ctrl_event_should_swallow(0))
-            self.assertTrue(pu.ctrl_event_should_swallow(1))
-            # Close, logoff, and shutdown must still reach the process.
-            self.assertFalse(pu.ctrl_event_should_swallow(2))
-            self.assertFalse(pu.ctrl_event_should_swallow(5))
-            self.assertFalse(pu.ctrl_event_should_swallow(6))
-        self.assertTrue(pu.ctrl_event_should_swallow(0))
-        later = pu._child_teardown_until + 0.01
-        with mock.patch.object(pu.time, "monotonic", return_value=later):
-            self.assertFalse(pu.ctrl_event_should_swallow(0))
-            self.assertFalse(pu.ctrl_event_should_swallow(1))
-
-    def test_teardown_ignores_console_ctrl_c_then_restores_it(self):
-        with mock.patch.object(pu, "_set_ignore_ctrl_c") as ignore, \
-             mock.patch.object(pu, "_schedule_restore_ctrl_c") as restore, \
-             mock.patch.object(pu, "clear_spurious_keyboard_interrupt") as clear:
-            with pu.child_teardown(quiet_seconds=1.25):
-                ignore.assert_called_with(True)
-                self.assertTrue(pu.ctrl_event_should_swallow(0))
-            clear.assert_called()
-        restore.assert_called_once_with(1.25)
-        ignore.assert_called_with(True)
-
-    def test_nested_teardown_stays_active_until_the_outer_exit(self):
-        with pu.child_teardown():
-            with pu.child_teardown():
-                self.assertEqual(pu._child_teardown_depth, 2)
-                self.assertTrue(pu.ctrl_event_should_swallow(0))
-            self.assertEqual(pu._child_teardown_depth, 1)
-            self.assertTrue(pu.ctrl_event_should_swallow(0))
-        self.assertEqual(pu._child_teardown_depth, 0)
+    def test_runtime_pid_alive_on_windows_does_not_use_signal_zero(self):
+        from absoloop_harness import runtime
+        with mock.patch.object(runtime.os, "name", "nt"), \
+             mock.patch("absoloop_harness.platform_util.windows_pid_alive",
+                        return_value=True) as probe, \
+             mock.patch.object(runtime.os, "kill") as kill:
+            self.assertTrue(runtime.pid_alive(42))
+        probe.assert_called_once_with(42)
+        kill.assert_not_called()
 
 
 class SpawnArgv(unittest.TestCase):
