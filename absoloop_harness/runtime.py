@@ -202,7 +202,7 @@ def kill_process_group(pid: int, pgid: Optional[int] = None) -> bool:
                 return True
             return True
         from .platform_util import kill_process_tree
-        # On Windows pgid == pid (CREATE_NEW_PROCESS_GROUP); kill the tree.
+        # Windows has no session to signal; kill the recorded pid's tree.
         return kill_process_tree(pid) or not pid_alive(pid)
     except (ProcessLookupError, PermissionError, OSError):
         try:
@@ -269,6 +269,11 @@ def cancel_run(run_dir: pathlib.Path) -> Dict[str, Any]:
     live["cancelled_at"] = time.time()
     live["children"] = []
     write_live(run_dir, live)
+    if os.name == "nt":
+        # A child that shared the console may already have tripped the
+        # sigint event. Clear it before the caller blocks in Thread.join.
+        from .platform_util import clear_spurious_keyboard_interrupt
+        clear_spurious_keyboard_interrupt()
     return {
         "ok": True,
         "reason": "cancelled",

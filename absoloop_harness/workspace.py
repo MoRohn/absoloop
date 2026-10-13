@@ -29,9 +29,10 @@ def _git(repo: pathlib.Path, *args: str, check: bool = True) -> subprocess.Compl
     kwargs: Dict[str, Any] = {}
     if os.name == "nt":
         # git.exe shares the parent console by default. A fatal worktree
-        # error delivers CTRL_C_EVENT to that console and aborts the suite
-        # with KeyboardInterrupt. A windowless process cannot do that.
-        kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
+        # error, or tearing that process down, delivers CTRL_C_EVENT to
+        # this console. Detach it so the suite is not KeyboardInterrupt'd.
+        from .platform_util import windows_child_creationflags
+        kwargs["creationflags"] = windows_child_creationflags()
     result = subprocess.run(["git", "-C", str(repo), *args],
                             capture_output=True, text=True, **kwargs)
     if check and result.returncode != 0:

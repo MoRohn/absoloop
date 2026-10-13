@@ -70,6 +70,16 @@ class StdioGuard(unittest.TestCase):
         self.assertEqual(stream.reconfigure.call_count, 2)
 
 
+class WindowsChild(unittest.TestCase):
+    def test_child_is_detached_from_the_console(self):
+        flags = pu.windows_child_creationflags()
+        self.assertTrue(flags & 0x00000008)   # DETACHED_PROCESS
+        self.assertTrue(flags & 0x08000000)   # CREATE_NO_WINDOW
+        # A new process group still shares the console. That is the flag
+        # that turned a provider's death into KeyboardInterrupt.
+        self.assertFalse(flags & 0x00000200)  # CREATE_NEW_PROCESS_GROUP
+
+
 class KillTree(unittest.TestCase):
     def tearDown(self):
         pu._child_teardown_depth = 0
@@ -112,6 +122,17 @@ class ChildTeardownCtrl(unittest.TestCase):
         with mock.patch.object(pu.time, "monotonic", return_value=later):
             self.assertFalse(pu.ctrl_event_should_swallow(0))
             self.assertFalse(pu.ctrl_event_should_swallow(1))
+
+    def test_teardown_ignores_console_ctrl_c_then_restores_it(self):
+        with mock.patch.object(pu, "_set_ignore_ctrl_c") as ignore, \
+             mock.patch.object(pu, "_schedule_restore_ctrl_c") as restore, \
+             mock.patch.object(pu, "clear_spurious_keyboard_interrupt") as clear:
+            with pu.child_teardown(quiet_seconds=1.25):
+                ignore.assert_called_with(True)
+                self.assertTrue(pu.ctrl_event_should_swallow(0))
+            clear.assert_called()
+        restore.assert_called_once_with(1.25)
+        ignore.assert_called_with(True)
 
     def test_nested_teardown_stays_active_until_the_outer_exit(self):
         with pu.child_teardown():

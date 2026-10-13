@@ -10,6 +10,7 @@ import pathlib
 import shutil
 import subprocess
 import sys
+import threading
 import time
 from contextlib import contextmanager
 from typing import Iterator, List, Optional, Sequence
@@ -166,6 +167,30 @@ def ctrl_event_should_swallow(ctrl_type: int) -> bool:
     return time.monotonic() < _child_teardown_until
 
 
+def windows_child_creationflags() -> int:
+    """CreateProcess flags that keep a child off this console.
+
+    ``CREATE_NEW_PROCESS_GROUP`` still attaches the child. When that child
+    is destroyed, Windows delivers ``CTRL_C_EVENT`` to the parent and the
+    next ``Thread.join`` raises ``KeyboardInterrupt``. ``DETACHED_PROCESS``
+    does not inherit the console, so a real Ctrl+C still aborts the CLI
+    and the child's death does not.
+    """
+    return _DETACHED_PROCESS | _CREATE_NO_WINDOW
+
+
+def _kernel32():
+    import ctypes
+    from ctypes import wintypes
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.SetConsoleCtrlHandler.argtypes = [ctypes.c_void_p, wintypes.BOOL]
+    kernel32.SetConsoleCtrlHandler.restype = wintypes.BOOL
+    kernel32.ResetEvent.argtypes = [ctypes.c_void_p]
+    kernel32.ResetEvent.restype = wintypes.BOOL
+    return kernel32
+
+
 def _install_console_ctrl_handler() -> None:
     """Install one handler that runs ahead of Python's.
 
@@ -178,10 +203,11 @@ def _install_console_ctrl_handler() -> None:
     if _ctrl_handler_installed or os.name != "nt":
         return
     import ctypes
-    from ctypes import wintypes
 
-    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
-    routine = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.DWORD)
+    # ctypes.WINFUNCTYPE, not a CFUNCTYPE argtype. Setting argtypes to the
+    # prototype and then passing the callback makes SetConsoleCtrlHandler
+    # fail, and the handler never runs.
+    routine = ctypes.WINFUNCTYPE(ctypes.c_int, ctypes.c_uint)
 
     def _on_console_ctrl(ctrl_type: int) -> int:
         try:
@@ -190,35 +216,117 @@ def _install_console_ctrl_handler() -> None:
             return 0
 
     callback = routine(_on_console_ctrl)
-    kernel32.SetConsoleCtrlHandler.argtypes = [routine, wintypes.BOOL]
-    kernel32.SetConsoleCtrlHandler.restype = wintypes.BOOL
-    if not kernel32.SetConsoleCtrlHandler(callback, True):
+    kernel32 = _kernel32()
+    # Pass the callback as a raw pointer so the NULL-handler argtypes
+    # (c_void_p) do not try to build a second prototype around it.
+    pointer = ctypes.cast(callback, ctypes.c_void_p)
+    if not kernel32.SetConsoleCtrlHandler(pointer, True):
         return
     _ctrl_handler_ref = callback
     _ctrl_handler_installed = True
 
 
+def _set_ignore_ctrl_c(ignore: bool) -> None:
+    """Ignore or restore console Ctrl+C for this process.
+
+    ``SetConsoleCtrlHandler(NULL, TRUE)`` is the Win32 switch for this.
+    It does not ignore Ctrl+Break, and it does not have to stay on: a
+    real Ctrl+C must still abort the CLI once child teardown is over.
+    Safe to call from any thread. No-op off Windows.
+    """
+    if os.name != "nt":
+        return
+    kernel32 = _kernel32()
+    kernel32.SetConsoleCtrlHandler(None, bool(ignore))
+
+
+_ctrl_c_restore_gen = 0
+
+
+def _schedule_restore_ctrl_c(delay_seconds: float) -> None:
+    """Re-enable Ctrl+C after ``delay_seconds`` on a daemon timer.
+
+    ``signal.signal`` is main-thread only. This Win32 call is not, so the
+    watchdog thread that killed the child can arm the restore too.
+    A newer teardown invalidates the previous timer.
+    """
+    global _ctrl_c_restore_gen
+    if os.name != "nt":
+        return
+    _ctrl_c_restore_gen += 1
+    generation = _ctrl_c_restore_gen
+
+    def _restore(expected: int = generation) -> None:
+        if expected != _ctrl_c_restore_gen or _child_teardown_depth > 0:
+            return
+        clear_spurious_keyboard_interrupt()
+        _set_ignore_ctrl_c(False)
+
+    timer = threading.Timer(delay_seconds, _restore)
+    timer.daemon = True
+    timer.start()
+
+
+def clear_spurious_keyboard_interrupt() -> None:
+    """Reset Python's manual-reset sigint event if a child already tripped it.
+
+    ``Thread.join`` waits on that event. Once set, the next join raises
+    ``KeyboardInterrupt`` even though the operator did not press Ctrl+C.
+    No-op off Windows, and no-op if this interpreter does not export the
+    event handle.
+    """
+    if os.name != "nt":
+        return
+    try:
+        import ctypes
+
+        kernel32 = _kernel32()
+        handle = None
+        try:
+            py = ctypes.pythonapi
+            py._PyOS_SigintEvent.restype = ctypes.c_void_p
+            py._PyOS_SigintEvent.argtypes = []
+            handle = py._PyOS_SigintEvent()
+        except (AttributeError, OSError):
+            handle = None
+        if not handle:
+            get_proc = kernel32.GetProcAddress
+            get_proc.argtypes = [ctypes.c_void_p, ctypes.c_char_p]
+            get_proc.restype = ctypes.c_void_p
+            addr = get_proc(ctypes.c_void_p(sys.dllhandle), b"_PyOS_SigintEvent")
+            if not addr:
+                return
+            getter = ctypes.CFUNCTYPE(ctypes.c_void_p)(addr)
+            handle = getter()
+        if handle:
+            kernel32.ResetEvent(ctypes.c_void_p(handle))
+    except Exception:
+        return
+
+
 @contextmanager
-def child_teardown() -> Iterator[None]:
+def child_teardown(quiet_seconds: float = _CHILD_TEARDOWN_QUIET_SECONDS) -> Iterator[None]:
     """Hold off spurious console Ctrl+C while a child tree is destroyed.
 
-    On Windows, killing a console child delivers CTRL_C_EVENT or
-    CTRL_BREAK_EVENT to every process that shares the console, including
-    the parent. Python raises KeyboardInterrupt on the main thread at the
-    next blocking call — often ``Thread.join``, after ``taskkill`` has
-    already returned. CREATE_NO_WINDOW does not stop that. The handler
-    swallows only for this block plus a few seconds, which is long enough
-    for the late event and short enough that a real Ctrl+C still aborts.
+    On Windows, killing a console child delivers CTRL_C_EVENT to every
+    process that shares the console. Python raises KeyboardInterrupt on
+    the main thread inside ``Thread.join``, after ``taskkill`` has already
+    returned. CREATE_NO_WINDOW does not stop that. Ctrl+C is ignored only
+    for this block plus a few seconds, then re-enabled so a real Ctrl+C
+    still aborts the CLI.
     """
     global _child_teardown_depth, _child_teardown_until
     _install_console_ctrl_handler()
+    _set_ignore_ctrl_c(True)
     _child_teardown_depth += 1
     try:
         yield
     finally:
         _child_teardown_depth = max(0, _child_teardown_depth - 1)
         if _child_teardown_depth == 0:
-            _child_teardown_until = time.monotonic() + _CHILD_TEARDOWN_QUIET_SECONDS
+            _child_teardown_until = time.monotonic() + quiet_seconds
+            clear_spurious_keyboard_interrupt()
+            _schedule_restore_ctrl_c(quiet_seconds)
 
 
 def kill_process_tree(pid: int) -> bool:

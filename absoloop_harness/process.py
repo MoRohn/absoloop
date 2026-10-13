@@ -111,19 +111,26 @@ class SupervisedProcess:
         if os.name != "nt":
             popen_kwargs["start_new_session"] = True   # own process group
         else:
-            # New group so Ctrl+C in the CLI is not delivered to the provider.
-            # No window so killing that provider cannot signal this console.
-            popen_kwargs["creationflags"] = (
-                subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW)
+            # Detach from this console. A new process group still shares it,
+            # and Windows then delivers CTRL_C_EVENT here when the provider
+            # dies (KeyboardInterrupt inside Thread.join).
+            from .platform_util import windows_child_creationflags
+            popen_kwargs["creationflags"] = windows_child_creationflags()
         self._started_at = time.time()
-        from .platform_util import prepare_spawn_argv
+        from .platform_util import child_teardown, prepare_spawn_argv
         spawn_argv = prepare_spawn_argv(self.argv)
-        self._proc = subprocess.Popen(
-            spawn_argv, cwd=self.cwd, env=self.env,
+        popen_args = dict(
+            cwd=self.cwd, env=self.env,
             text=True, encoding="utf-8", errors="replace",
             stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             stdin=subprocess.PIPE if self.stdin_text is not None else subprocess.DEVNULL,
             **popen_kwargs)
+        if os.name == "nt":
+            # Cover the create itself. The kill path has its own window.
+            with child_teardown(quiet_seconds=1.0):
+                self._proc = subprocess.Popen(spawn_argv, **popen_args)
+        else:
+            self._proc = subprocess.Popen(spawn_argv, **popen_args)
         threading.Thread(target=self._drain_stderr, daemon=True).start()
         if self.stdin_text is not None:
             threading.Thread(target=self._feed_stdin, daemon=True).start()
