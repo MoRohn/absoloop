@@ -50,6 +50,8 @@ A manual run of **Deploy website** has a `reload_caddy` checkbox. That runs `doc
 
 The same variables work in a shell for [`deploy/deploy.sh`](deploy/deploy.sh). `WEB1_SSH_KEY` may be either the key text or a path to a key file.
 
+The workflow runs only on the repository's default branch. Until `WEB1_HOST`, `WEB1_USER`, and `WEB1_SSH_KEY` are set, that job prints a notice and exits successfully. It does not copy files. A shell run of `deploy/deploy.sh` still stops immediately if those three are missing.
+
 ## 2. One-time directory on web-1
 
 SSH to web-1 as an admin. Pick the deploy user (the same name you will store in `WEB1_USER`).

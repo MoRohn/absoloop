@@ -55,6 +55,7 @@
       <nav class="nav" aria-label="Primary">
         <a href="#loop">The loop</a>
         <a href="#ledger">Why it holds</a>
+        <a href="#board">The board</a>
         <a href="#start">Start</a>
       </nav>
       <a class="nav-github" href="https://github.com/MoRohn/absoloop">
@@ -201,6 +202,32 @@
             <code class="chip">absoloop build --strategy race</code>
           </article>
         </div>
+      </section>
+
+      <section class="panel" id="board" aria-labelledby="board-title">
+        <div class="panel-intro">
+          <p class="kicker">See it in action</p>
+          <h2 id="board-title">The board, while the loop waits on you.</h2>
+          <p>
+            ZComb is the kanban AbsoLoop opens beside the CLI. This frame is
+            that monitor, on a mission the critic has already approved.
+          </p>
+        </div>
+        <!-- Captured from zcomb/monitor. State came from absoloop_harness.zcomb.sync_state, not a mock. -->
+        <figure class="showcase">
+          <div class="showcase-frame" tabindex="0" role="region" aria-label="ZComb kanban. On a narrow screen, scroll sideways to see every column.">
+            <img
+              src="/assets/kanban-board.webp"
+              srcset="/assets/kanban-board.webp 1500w, /assets/kanban-board-2x.webp 3000w"
+              sizes="(max-width: 720px) 920px, min(90rem, 92vw)"
+              width="1500"
+              height="697"
+              alt="ZComb Kanban for the mission Make all tests pass, status awaiting approval. Review shows the human approval gate, Done shows two finished repair iterations, and Inbox shows delivery."
+              loading="lazy"
+              decoding="async">
+          </div>
+          <figcaption>ABS-014 · Make all tests pass · waiting at the human gate</figcaption>
+        </figure>
       </section>
 
       <section class="panel" id="start" aria-labelledby="start-title">

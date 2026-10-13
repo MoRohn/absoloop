@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import os
 import re
+import shutil
 import subprocess
 import unittest
 from pathlib import Path
@@ -27,6 +29,12 @@ class SiteTests(unittest.TestCase):
         self.assertIn('rel="canonical"', INDEX)
         self.assertIn("og:image", INDEX)
         self.assertIn("Skip to content", INDEX)
+        self.assertIn('id="board"', INDEX)
+        self.assertIn("See it in action", INDEX)
+        self.assertIn("/assets/kanban-board.webp", INDEX)
+        self.assertIn("/assets/kanban-board-2x.webp", INDEX)
+        self.assertIn('loading="lazy"', INDEX)
+        self.assertIn("human approval gate", INDEX)
         self.assertIn("No AbsoLoop cloud", INDEX)
         self.assertIn("MIT", INDEX)
         self.assertNotIn("<script src", INDEX)
@@ -42,6 +50,14 @@ class SiteTests(unittest.TestCase):
         self.assertTrue(hero.is_file())
         self.assertTrue(still.is_file())
         self.assertLess(hero.stat().st_size, 2_000_000)
+        board = SITE / "assets" / "kanban-board.webp"
+        board_2x = SITE / "assets" / "kanban-board-2x.webp"
+        self.assertTrue(board.is_file())
+        self.assertTrue(board_2x.is_file())
+        self.assertLess(board.stat().st_size, 200_000)
+        self.assertLess(board_2x.stat().st_size, 250_000)
+        css = (SITE / "styles.css").read_text(encoding="utf-8")
+        self.assertIn(".showcase-frame", css)
         self.assertTrue((SITE / "assets" / "og.png").is_file())
         self.assertTrue((SITE / "favicon.svg").is_file())
         self.assertTrue((SITE / "styles.css").is_file())
@@ -71,12 +87,30 @@ class SiteTests(unittest.TestCase):
         self.assertIn("/srv/sites/absoloop.ai", DEPLOY)
         self.assertIn("docker exec caddy caddy reload --config /etc/caddy/Caddyfile", DEPLOY)
         self.assertIn("/srv/caddy/Caddyfile", WORKFLOW)
+        self.assertIn("github.event.repository.default_branch", WORKFLOW)
+        self.assertIn("Deploy skipped", WORKFLOW)
+        self.assertIn("Nothing was deployed", WORKFLOW)
         self.assertNotIn("WEB1_CADDY_BIN", WORKFLOW)
         self.assertNotIn("/var/www/absoloop", DEPLOY)
         self.assertNotIn("2.29.59.0", DEPLOY)
         self.assertNotIn("amazonaws.com", WORKFLOW.lower())
         self.assertNotRegex(WORKFLOW, r"(?im)^\s*(run:|uses:).*(cloudfront|aws\s+s3|s3\s+sync)")
-        subprocess.check_call(["bash", "-n", str(ROOT / "deploy" / "deploy.sh")])
+        subprocess.check_call([_bash_exe(), "-n", str(ROOT / "deploy" / "deploy.sh")])
+
+
+def _bash_exe() -> str:
+    """Git for Windows ships a real bash. System32\\bash.exe is a WSL stub."""
+    if os.name == "nt":
+        for candidate in (
+            r"C:\Program Files\Git\bin\bash.exe",
+            r"C:\Program Files\Git\usr\bin\bash.exe",
+        ):
+            if os.path.isfile(candidate):
+                return candidate
+        found = shutil.which("bash")
+        if found and "system32" not in found.replace("\\", "/").lower():
+            return found
+    return "bash"
 
 
 if __name__ == "__main__":

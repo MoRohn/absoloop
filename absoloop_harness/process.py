@@ -111,14 +111,26 @@ class SupervisedProcess:
         if os.name != "nt":
             popen_kwargs["start_new_session"] = True   # own process group
         else:
-            popen_kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
+            # Detach from this console. A new process group still shares it,
+            # and Windows then delivers CTRL_C_EVENT here when the provider
+            # dies (KeyboardInterrupt inside Thread.join).
+            from .platform_util import windows_child_creationflags
+            popen_kwargs["creationflags"] = windows_child_creationflags()
         self._started_at = time.time()
-        self._proc = subprocess.Popen(
-            self.argv, cwd=self.cwd, env=self.env,
+        from .platform_util import child_teardown, prepare_spawn_argv
+        spawn_argv = prepare_spawn_argv(self.argv)
+        popen_args = dict(
+            cwd=self.cwd, env=self.env,
             text=True, encoding="utf-8", errors="replace",
             stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             stdin=subprocess.PIPE if self.stdin_text is not None else subprocess.DEVNULL,
             **popen_kwargs)
+        if os.name == "nt":
+            # Cover the create itself. The kill path has its own window.
+            with child_teardown(quiet_seconds=1.0):
+                self._proc = subprocess.Popen(spawn_argv, **popen_args)
+        else:
+            self._proc = subprocess.Popen(spawn_argv, **popen_args)
         threading.Thread(target=self._drain_stderr, daemon=True).start()
         if self.stdin_text is not None:
             threading.Thread(target=self._feed_stdin, daemon=True).start()
@@ -203,17 +215,21 @@ class SupervisedProcess:
                 os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
             else:
                 # Provider CLIs spawn grandchildren; terminate the whole tree.
-                from .platform_util import kill_process_tree
-                if not kill_process_tree(proc.pid):
-                    proc.terminate()
-                for _ in range(20):
-                    if proc.poll() is not None:
-                        return
-                    time.sleep(0.1)
-                try:
-                    proc.kill()
-                except OSError:
-                    pass
+                # Stay inside child_teardown until the process is actually
+                # gone: Windows can deliver CTRL_C_EVENT after taskkill
+                # returns, and proc.kill() can deliver another.
+                from .platform_util import child_teardown, kill_process_tree
+                with child_teardown():
+                    if not kill_process_tree(proc.pid):
+                        proc.terminate()
+                    for _ in range(20):
+                        if proc.poll() is not None:
+                            return
+                        time.sleep(0.1)
+                    try:
+                        proc.kill()
+                    except OSError:
+                        pass
         except (ProcessLookupError, PermissionError, OSError):
             try:
                 proc.kill()
