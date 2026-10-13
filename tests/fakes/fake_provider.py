@@ -47,6 +47,29 @@ def emit(obj):
     sys.stdout.flush()
 
 
+def hang() -> int:
+    """Block until the parent cancels this process.
+
+    ``time.sleep(3600)`` does not return when Windows delivers CTRL_BREAK
+    to the process group, so the parent would have to hard-kill every
+    hang. Short sleeps let SIGBREAK become KeyboardInterrupt. SIGTERM on
+    Unix still ends the process with the default disposition.
+    """
+    if os.name == "nt":
+        import signal
+        sigbreak = getattr(signal, "SIGBREAK", None)
+        if sigbreak is not None:
+            try:
+                signal.signal(sigbreak, signal.default_int_handler)
+            except (OSError, ValueError):
+                pass
+    try:
+        while True:
+            time.sleep(0.2)
+    except KeyboardInterrupt:
+        return 130
+
+
 def main() -> int:
     argv = sys.argv[1:]
     if "--version" in argv or "-V" in argv:
@@ -79,7 +102,7 @@ def main() -> int:
     if style == "grok":
         emit({"type": "text", "data": "working on it"})
         if MODE == "hang":
-            time.sleep(3600)
+            return hang()
         if MODE == "partial-json":
             sys.stdout.write('{"type":"text","data":"trunc\n')
             sys.stdout.flush()
@@ -100,7 +123,7 @@ def main() -> int:
         emit({"type": "system", "subtype": "init", "session_id": SESSION,
               "model": "fake-claude"})
         if MODE == "hang":
-            time.sleep(3600)
+            return hang()
         emit({"type": "assistant", "message": {"content": [
             {"type": "tool_use", "id": "t1", "name": "Edit",
              "input": {"file_path": "a.py"}},
@@ -122,7 +145,7 @@ def main() -> int:
     # codex
     emit({"type": "thread.started", "thread_id": SESSION})
     if MODE == "hang":
-        time.sleep(3600)
+        return hang()
     emit({"type": "item.started", "item": {"item_type": "command_execution",
                                            "command": "pytest"}})
     emit({"type": "item.completed", "item": {"item_type": "command_execution",
