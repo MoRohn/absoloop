@@ -272,19 +272,18 @@ def _schedule_restore_ctrl_c(delay_seconds: float) -> None:
 # C runtime uses; 1 is SIG_IGN on Windows and on POSIX.
 _SIG_IGN_PTR = 1
 _sigint_ignore_until = 0.0
-_c_sigint_prev = None
-_c_sigbreak_prev = None
 _sigint_py_saved = None
 _sigbreak_py_saved = None
-_pending_restore_ref = None
-_restore_timer = None
+
+
+_restore_trace_installed = False
 
 
 def _pyos_setsig(signum: int, handler):
-    """Set the C signal disposition. Works from any thread.
+    """Set the C signal disposition. Callable from a worker thread.
 
-    ``signal.signal`` refuses non-main threads, but the spurious SIGINT
-    arrives while the main thread is blocked in ``Thread.join``.
+    ``signal.signal`` refuses non-main threads. A worker killing a child
+    still has to ignore SIGINT before the main thread reacquires the GIL.
     """
     import ctypes
 
@@ -295,22 +294,8 @@ def _pyos_setsig(signum: int, handler):
     return py.PyOS_setsig(int(signum), pointer)
 
 
-def _install_sigint_ignore() -> None:
-    """Point SIGINT/SIGBREAK at SIG_IGN until :func:`_restore_sigint_ignore`."""
-    global _c_sigint_prev, _c_sigbreak_prev, _sigint_py_saved, _sigbreak_py_saved
-    if _c_sigint_prev is None:
-        try:
-            _c_sigint_prev = _pyos_setsig(signal.SIGINT, _SIG_IGN_PTR)
-        except (AttributeError, OSError, TypeError):
-            _c_sigint_prev = None
-        sigbreak = getattr(signal, "SIGBREAK", None)
-        if sigbreak is not None:
-            try:
-                _c_sigbreak_prev = _pyos_setsig(sigbreak, _SIG_IGN_PTR)
-            except (AttributeError, OSError, TypeError):
-                _c_sigbreak_prev = None
-    if threading.current_thread() is not threading.main_thread():
-        return
+def _ignore_sigint_on_main_thread() -> None:
+    global _sigint_py_saved, _sigbreak_py_saved
     if _sigint_py_saved is None:
         try:
             _sigint_py_saved = signal.getsignal(signal.SIGINT)
@@ -324,6 +309,7 @@ def _install_sigint_ignore() -> None:
                 signal.signal(sigbreak, signal.SIG_IGN)
             except (OSError, ValueError, TypeError):
                 _sigbreak_py_saved = None
+    _drain_pending_keyboard_interrupt()
 
 
 def _drain_pending_keyboard_interrupt() -> None:
@@ -347,88 +333,55 @@ def _drain_pending_keyboard_interrupt() -> None:
 
 
 def _restore_python_sigint_handlers() -> None:
-    global _sigint_py_saved, _sigbreak_py_saved, _c_sigint_prev, _c_sigbreak_prev
+    global _sigint_py_saved, _sigbreak_py_saved, _restore_trace_installed
     saved_int = _sigint_py_saved
     saved_break = _sigbreak_py_saved
-    c_int = _c_sigint_prev
-    c_break = _c_sigbreak_prev
     _sigint_py_saved = None
     _sigbreak_py_saved = None
-    _c_sigint_prev = None
-    _c_sigbreak_prev = None
-    if threading.current_thread() is threading.main_thread():
-        try:
-            if saved_int is not None:
-                signal.signal(signal.SIGINT, saved_int)
-            sigbreak = getattr(signal, "SIGBREAK", None)
-            if sigbreak is not None and saved_break is not None:
-                signal.signal(sigbreak, saved_break)
-            return
-        except (OSError, ValueError, TypeError):
-            pass
-    if c_int is not None:
-        try:
-            _pyos_setsig(signal.SIGINT, c_int)
-        except (AttributeError, OSError, TypeError):
-            pass
-    sigbreak = getattr(signal, "SIGBREAK", None)
-    if sigbreak is not None and c_break is not None:
-        try:
-            _pyos_setsig(sigbreak, c_break)
-        except (AttributeError, OSError, TypeError):
-            pass
-
-
-def _queue_sigint_restore() -> None:
-    """Run the restore on the main thread once it is back in the eval loop.
-
-    ``Thread.join`` holds the GIL released inside ``lock.acquire``. A
-    pending call is delivered when that acquire finishes, which is after
-    the window where the spurious SIGINT would have been raised.
-    """
-    global _pending_restore_ref
-    try:
-        import ctypes
-
-        routine = ctypes.CFUNCTYPE(ctypes.c_int, ctypes.c_void_p)
-
-        def _on_pending(_arg) -> int:
-            try:
-                _restore_python_sigint_handlers()
-            except Exception:
-                return 0
-            return 0
-
-        callback = routine(_on_pending)
-        _pending_restore_ref = callback
-        py = ctypes.pythonapi
-        py.Py_AddPendingCall.argtypes = [routine, ctypes.c_void_p]
-        py.Py_AddPendingCall.restype = ctypes.c_int
-        if py.Py_AddPendingCall(callback, None) == 0:
-            return
-    except Exception:
-        pass
-    if threading.current_thread() is threading.main_thread():
-        _restore_python_sigint_handlers()
-
-
-def _restore_sigint_if_due() -> None:
-    if time.monotonic() < _sigint_ignore_until:
-        _arm_sigint_restore_timer()
+    _restore_trace_installed = False
+    if threading.current_thread() is not threading.main_thread():
         return
-    if threading.current_thread() is threading.main_thread():
-        _restore_python_sigint_handlers()
-    else:
-        _queue_sigint_restore()
+    try:
+        if saved_int is not None:
+            signal.signal(signal.SIGINT, saved_int)
+        sigbreak = getattr(signal, "SIGBREAK", None)
+        if sigbreak is not None and saved_break is not None:
+            signal.signal(sigbreak, saved_break)
+    except (OSError, ValueError, TypeError):
+        return
 
 
-def _arm_sigint_restore_timer() -> None:
-    global _restore_timer
-    delay = max(0.05, _sigint_ignore_until - time.monotonic())
-    timer = threading.Timer(delay, _restore_sigint_if_due)
-    timer.daemon = True
-    timer.start()
-    _restore_timer = timer
+def _install_restore_trace() -> None:
+    """Restore SIGINT on a later line event, once the shield window ends.
+
+    A ctypes pending-call callback is not used: it runs after the window
+    and was aborting the process with no traceback. Line tracing stays on
+    the main thread, which is the only place ``signal.signal`` is legal.
+    """
+    global _restore_trace_installed
+    if _restore_trace_installed:
+        return
+    if threading.current_thread() is not threading.main_thread():
+        return
+    previous = sys.gettrace()
+
+    def _trace(frame, event, arg, previous=previous):
+        if time.monotonic() >= _sigint_ignore_until:
+            _restore_python_sigint_handlers()
+            sys.settrace(previous)
+            if previous is not None:
+                return previous(frame, event, arg)
+            return None
+        if previous is not None:
+            return previous(frame, event, arg)
+        return _trace
+
+    sys.settrace(_trace)
+    frame = sys._getframe()
+    while frame is not None:
+        frame.f_trace = _trace
+        frame = frame.f_back
+    _restore_trace_installed = True
 
 
 def shield_console_interrupt(seconds: float = 8.0) -> None:
@@ -445,9 +398,17 @@ def shield_console_interrupt(seconds: float = 8.0) -> None:
     if os.name != "nt":
         return
     _sigint_ignore_until = max(_sigint_ignore_until, time.monotonic() + max(0.0, seconds))
-    _install_sigint_ignore()
-    _drain_pending_keyboard_interrupt()
-    _arm_sigint_restore_timer()
+    if threading.current_thread() is threading.main_thread():
+        _ignore_sigint_on_main_thread()
+        _install_restore_trace()
+        return
+    try:
+        _pyos_setsig(signal.SIGINT, _SIG_IGN_PTR)
+        sigbreak = getattr(signal, "SIGBREAK", None)
+        if sigbreak is not None:
+            _pyos_setsig(sigbreak, _SIG_IGN_PTR)
+    except (AttributeError, OSError, TypeError):
+        return
 
 
 def clear_spurious_keyboard_interrupt() -> None:

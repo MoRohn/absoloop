@@ -73,34 +73,35 @@ class StdioGuard(unittest.TestCase):
 class SigintShield(unittest.TestCase):
     def tearDown(self):
         pu._sigint_ignore_until = 0.0
-        pu._c_sigint_prev = None
-        pu._c_sigbreak_prev = None
         pu._sigint_py_saved = None
         pu._sigbreak_py_saved = None
+        pu._restore_trace_installed = False
+        sys.settrace(None)
 
     def test_shield_ignores_sigint_until_the_join_can_finish(self):
         with mock.patch.object(pu.os, "name", "nt"), \
-             mock.patch.object(pu, "_pyos_setsig", return_value=123) as setsig, \
              mock.patch.object(pu.signal, "getsignal",
                                return_value=pu.signal.default_int_handler), \
              mock.patch.object(pu.signal, "signal") as sig, \
              mock.patch.object(pu, "_drain_pending_keyboard_interrupt"), \
-             mock.patch.object(pu, "_arm_sigint_restore_timer") as arm, \
+             mock.patch.object(pu, "_install_restore_trace") as trace, \
              mock.patch.object(pu.threading, "current_thread",
                                return_value=pu.threading.main_thread()):
             pu.shield_console_interrupt(8)
-        setsig.assert_any_call(pu.signal.SIGINT, pu._SIG_IGN_PTR)
         sig.assert_any_call(pu.signal.SIGINT, pu.signal.SIG_IGN)
-        arm.assert_called_once()
+        trace.assert_called_once()
         self.assertGreater(pu._sigint_ignore_until, 0.0)
+        self.assertIs(pu._sigint_py_saved, pu.signal.default_int_handler)
 
-    def test_early_restore_waits_for_the_join_window(self):
+    def test_restore_trace_waits_until_the_window_ends(self):
         pu._sigint_ignore_until = pu.time.monotonic() + 30.0
-        with mock.patch.object(pu, "_arm_sigint_restore_timer") as arm, \
-             mock.patch.object(pu, "_restore_python_sigint_handlers") as restore:
-            pu._restore_sigint_if_due()
-        arm.assert_called_once()
+        with mock.patch.object(pu, "_restore_python_sigint_handlers") as restore:
+            pu._install_restore_trace()
+            tracer = sys.gettrace()
+            self.assertIsNotNone(tracer)
+            self.assertIs(tracer(sys._getframe(), "line", None), tracer)
         restore.assert_not_called()
+        sys.settrace(None)
 
 
 class WindowsChild(unittest.TestCase):
