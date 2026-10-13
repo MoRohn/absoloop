@@ -1,0 +1,254 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#060708">
+    <meta name="color-scheme" content="dark">
+    <meta name="description" content="AbsoLoop is free, open-source software for local agent CLIs. Bounded loops where a builder, an independent critic, and you agree before anything is called done.">
+    <meta name="robots" content="index, follow">
+    <link rel="canonical" href="https://absoloop.ai/">
+    <meta property="og:type" content="website">
+    <meta property="og:site_name" content="AbsoLoop">
+    <meta property="og:title" content="AbsoLoop — Synergetic Loops">
+    <meta property="og:description" content="Evidence wins. Budgets bind. The critic does not take your word. Free, MIT-licensed, and no AbsoLoop cloud.">
+    <meta property="og:url" content="https://absoloop.ai/">
+    <meta property="og:image" content="https://absoloop.ai/assets/og.png">
+    <meta property="og:image:width" content="1200">
+    <meta property="og:image:height" content="630">
+    <meta property="og:image:alt" content="The AbsoLoop infinity mark, assembled from colored blocks, with the line Synergetic Loops.">
+    <meta name="twitter:card" content="summary_large_image">
+    <meta name="twitter:title" content="AbsoLoop — Synergetic Loops">
+    <meta name="twitter:description" content="Evidence wins. Budgets bind. The critic does not take your word.">
+    <meta name="twitter:image" content="https://absoloop.ai/assets/og.png">
+    <title>AbsoLoop — Synergetic Loops</title>
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+    <link rel="apple-touch-icon" href="/assets/apple-touch-icon.png">
+    <link rel="preload" as="image" href="/assets/absoloop-os.webp" type="image/webp" media="(prefers-reduced-motion: no-preference)">
+    <link rel="preload" as="image" href="/assets/absoloop-os-still.webp" type="image/webp" media="(prefers-reduced-motion: reduce)">
+    <link rel="stylesheet" href="/styles.css">
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@type": "SoftwareApplication",
+        "name": "AbsoLoop",
+        "applicationCategory": "DeveloperApplication",
+        "operatingSystem": "Linux, macOS, Windows",
+        "url": "https://absoloop.ai/",
+        "codeRepository": "https://github.com/MoRohn/absoloop",
+        "license": "https://opensource.org/licenses/MIT",
+        "isAccessibleForFree": true,
+        "description": "Free, open-source orchestrator for local agent CLIs. Bounded, evidence-gated loops with an independent critic and a human gate.",
+        "offers": {
+          "@type": "Offer",
+          "price": "0",
+          "priceCurrency": "USD"
+        }
+      }
+    </script>
+  </head>
+  <body id="top">
+    <a class="skip-link" href="#content">Skip to content</a>
+
+    <header class="top">
+      <a class="brand" href="#top">AbsoLoop</a>
+      <nav class="nav" aria-label="Primary">
+        <a href="#loop">The loop</a>
+        <a href="#ledger">Why it holds</a>
+        <a href="#start">Start</a>
+      </nav>
+      <a class="nav-github" href="https://github.com/MoRohn/absoloop">
+        GitHub
+        <svg viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+          <path d="M4 12 12 4M6 4h6v6" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+      </a>
+    </header>
+
+    <main id="content">
+      <section class="hero" aria-labelledby="hero-title">
+        <div class="stage">
+          <div class="glow" aria-hidden="true"></div>
+          <!-- Hero animation derived from docs/assets/AbsoLoopOS.gif (README header). -->
+          <picture>
+            <source srcset="/assets/absoloop-os-still.webp" type="image/webp" media="(prefers-reduced-motion: reduce)">
+            <img
+              src="/assets/absoloop-os.webp"
+              width="480"
+              height="372"
+              alt="Colored blocks assemble into the AbsoLoop infinity mark, then come apart and build again."
+              fetchpriority="high"
+              decoding="async">
+          </picture>
+        </div>
+
+        <div class="hero-copy">
+          <p class="kicker">Open source · MIT · No cost</p>
+          <h1 id="hero-title">Synergetic<br>Loops</h1>
+          <p class="lede">
+            AbsoLoop runs bounded cycles where a builder, an independent critic,
+            you, and the local agent CLIs you already use compound. The outcome
+            has to be stronger than any one of them.
+          </p>
+          <p class="manifesto">Evidence wins. Budgets bind. The critic does not take your word.</p>
+          <div class="actions">
+            <a class="button button-primary" href="https://github.com/MoRohn/absoloop">
+              View on GitHub
+              <svg viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+                <path d="M4 12 12 4M6 4h6v6" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+              </svg>
+            </a>
+            <a class="button button-secondary" href="#start">Start on your machine</a>
+          </div>
+          <ul class="facts" aria-label="What it costs and where it runs">
+            <li>Free forever</li>
+            <li>No account</li>
+            <li>No AbsoLoop cloud</li>
+            <li>Python 3.9+</li>
+            <li>Zero pip dependencies</li>
+          </ul>
+        </div>
+      </section>
+
+      <section class="panel" id="loop" aria-labelledby="loop-title">
+        <div class="panel-intro">
+          <p class="kicker">The mission loop</p>
+          <h2 id="loop-title">Done is an agreement, not a declaration.</h2>
+          <p>
+            You state the objective. AbsoLoop writes a checkpointed contract and
+            closes the loop only when the proof survives review.
+          </p>
+        </div>
+        <ol class="rail">
+          <li>
+            <span class="idx">01</span>
+            <strong>Objective</strong>
+            <p>State the outcome in plain language.</p>
+          </li>
+          <li>
+            <span class="idx">02</span>
+            <strong><code>/goal</code></strong>
+            <p>A contract names the evidence, the budget, and done.</p>
+          </li>
+          <li>
+            <span class="idx">03</span>
+            <strong>Builder</strong>
+            <p>Repair, test, and escalate thinking when stuck.</p>
+          </li>
+          <li>
+            <span class="idx">04</span>
+            <strong>Critic</strong>
+            <p>Read-only review that tries to disprove the result.</p>
+          </li>
+          <li>
+            <span class="idx">05</span>
+            <strong>Human gate</strong>
+            <p>Approve, reject, resume, or extend.</p>
+          </li>
+        </ol>
+      </section>
+
+      <section class="panel" id="ledger" aria-labelledby="ledger-title">
+        <div class="panel-intro">
+          <p class="kicker">Why it holds</p>
+          <h2 id="ledger-title">Local agents. Hard edges.</h2>
+          <p>No cloud AbsoLoop service. No mystery SaaS. Your machine, your providers, your ledger.</p>
+        </div>
+        <dl class="ledger">
+          <div>
+            <dt>Evidence</dt>
+            <dd>Narratives and “looks good” diffs are not acceptance. The contract names the proof.</dd>
+          </div>
+          <div>
+            <dt>Critic</dt>
+            <dd>An independent reviewer tries to break the result before it reaches you.</dd>
+          </div>
+          <div>
+            <dt>Budgets</dt>
+            <dd>Iterations, wall clock, and dollars stay visible. Stop safely, then resume or extend.</dd>
+          </div>
+          <div>
+            <dt>Providers</dt>
+            <dd>Grok, Claude Code, and Codex keep their own authentication, tools, and sessions.</dd>
+          </div>
+          <div>
+            <dt>Runtime</dt>
+            <dd>Python 3.9 and the standard library. Nothing to pip install for the core CLI.</dd>
+          </div>
+          <div>
+            <dt>Price</dt>
+            <dd>Free. MIT licensed. No subscription and no AbsoLoop account.</dd>
+          </div>
+        </dl>
+      </section>
+
+      <section class="panel" id="surfaces" aria-labelledby="surfaces-title">
+        <div class="panel-intro">
+          <p class="kicker">One CLI</p>
+          <h2 id="surfaces-title">Two ways to run it.</h2>
+        </div>
+        <div class="split">
+          <article>
+            <p class="kicker">Day to day</p>
+            <h3>Mission loop</h3>
+            <p>Checkpointed repair toward a <code>/goal</code> contract, then a human gate.</p>
+            <code class="chip">absoloop "Make all tests pass"</code>
+          </article>
+          <article>
+            <p class="kicker">One shot</p>
+            <h3>Harness</h3>
+            <p>Race, council, or a cross-provider review in isolated git worktrees.</p>
+            <code class="chip">absoloop build --strategy race</code>
+          </article>
+        </div>
+      </section>
+
+      <section class="panel" id="start" aria-labelledby="start-title">
+        <div class="start-grid">
+          <div class="panel-intro">
+            <p class="kicker">Quick start</p>
+            <h2 id="start-title">Start a loop on your machine.</h2>
+            <p>
+              Bring Python 3.9+ and at least one provider CLI: Grok, Claude Code,
+              or Codex. AbsoLoop keeps the tools and the login you already use.
+            </p>
+            <a class="text-link" href="https://github.com/MoRohn/absoloop/blob/main/docs/getting-started.md">
+              Full setup guide
+              <svg viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+                <path d="M4 12 12 4M6 4h6v6" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+              </svg>
+            </a>
+          </div>
+          <div class="terminal" role="region" aria-label="Install commands">
+            <div class="terminal-bar">
+              <span>mission-prep</span>
+              <span class="ready">Ready</span>
+            </div>
+            <pre><code>$ git clone https://github.com/MoRohn/absoloop.git
+$ cd absoloop
+$ export PATH="$PWD/bin:$PATH"
+$ absoloop setup
+$ absoloop "Make all tests pass"</code></pre>
+          </div>
+        </div>
+      </section>
+
+      <section class="close" aria-labelledby="close-title">
+        <p class="kicker">Build with receipts</p>
+        <h2 id="close-title">Let the loop earn “done.”</h2>
+        <a class="button button-primary" href="https://github.com/MoRohn/absoloop">
+          View the open-source project
+          <svg viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+            <path d="M4 12 12 4M6 4h6v6" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+        </a>
+      </section>
+    </main>
+
+    <footer class="foot">
+      <p>AbsoLoop is free software by <a href="https://www.blerbz.com">BLERBZ Labs</a>. <a href="https://github.com/MoRohn/absoloop/blob/main/LICENSE">MIT License</a>.</p>
+      <p>This page is static. It does not load trackers or third-party scripts.</p>
+      <p>© 2026 BLERBZ and AbsoLoop contributors.</p>
+    </footer>
+  </body>
+</html>

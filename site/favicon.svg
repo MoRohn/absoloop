@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" role="img" aria-label="AbsoLoop">
+  <rect width="32" height="32" rx="7" fill="#060708"/>
+  <defs>
+    <linearGradient id="ribbon" x1="4" y1="16" x2="28" y2="16" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#0069ff"/>
+      <stop offset="0.28" stop-color="#00cde1"/>
+      <stop offset="0.5" stop-color="#28cd78"/>
+      <stop offset="0.72" stop-color="#ffbe0f"/>
+      <stop offset="1" stop-color="#ff195f"/>
+    </linearGradient>
+  </defs>
+  <path d="M16 16C16 16 13.2 11.2 9.6 11.2C6.6 11.2 4.4 13.3 4.4 16S6.6 20.8 9.6 20.8C13.2 20.8 16 16 16 16S18.8 11.2 22.4 11.2C25.4 11.2 27.6 13.3 27.6 16S25.4 20.8 22.4 20.8C18.8 20.8 16 16 16 16Z" fill="none" stroke="url(#ribbon)" stroke-width="2.3" stroke-linejoin="round"/>
+</svg>
