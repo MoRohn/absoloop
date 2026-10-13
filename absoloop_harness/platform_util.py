@@ -145,9 +145,14 @@ def kill_process_tree(pid: int) -> bool:
         return False
     if is_windows():
         try:
+            # taskkill is a console program. Attached to this console it can
+            # deliver CTRL_C_EVENT to the parent (KeyboardInterrupt) when it
+            # tears down a child tree. CREATE_NO_WINDOW keeps that event off
+            # the CLI and the test runner.
             result = subprocess.run(
                 ["taskkill", "/PID", str(pid), "/T", "/F"],
-                capture_output=True, text=True, timeout=20, check=False)
+                capture_output=True, text=True, timeout=20, check=False,
+                creationflags=subprocess.CREATE_NO_WINDOW)
             # 0 = killed, 128 = not found (already gone) — both OK for cancel.
             return result.returncode in (0, 128)
         except (OSError, subprocess.TimeoutExpired):

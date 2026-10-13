@@ -111,7 +111,10 @@ class SupervisedProcess:
         if os.name != "nt":
             popen_kwargs["start_new_session"] = True   # own process group
         else:
-            popen_kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
+            # New group so Ctrl+C in the CLI is not delivered to the provider.
+            # No window so killing that provider cannot signal this console.
+            popen_kwargs["creationflags"] = (
+                subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW)
         self._started_at = time.time()
         from .platform_util import prepare_spawn_argv
         spawn_argv = prepare_spawn_argv(self.argv)

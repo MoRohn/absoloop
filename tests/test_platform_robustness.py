@@ -4,6 +4,7 @@ from __future__ import annotations
 import io
 import os
 import pathlib
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -68,6 +69,18 @@ class StdioGuard(unittest.TestCase):
             pu.ensure_stdio()
         stream.reconfigure.assert_called_with(errors="replace")
         self.assertEqual(stream.reconfigure.call_count, 2)
+
+
+class KillTree(unittest.TestCase):
+    def test_windows_taskkill_does_not_attach_a_console(self):
+        completed = mock.Mock(returncode=0)
+        with mock.patch.object(pu, "is_windows", return_value=True), \
+             mock.patch.object(pu.subprocess, "run", return_value=completed) as run:
+            self.assertTrue(pu.kill_process_tree(4321))
+        args = run.call_args.args[0]
+        self.assertEqual(args[:5], ["taskkill", "/PID", "4321", "/T", "/F"])
+        flags = run.call_args.kwargs.get("creationflags", 0)
+        self.assertTrue(flags & subprocess.CREATE_NO_WINDOW)
 
 
 class SpawnArgv(unittest.TestCase):
