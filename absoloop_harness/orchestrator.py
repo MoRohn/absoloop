@@ -364,9 +364,12 @@ class Orchestrator:
                     with lock:
                         candidates.append(candidate)
                 except Exception as exc:  # noqa: BLE001 — surface in artifacts
+                    import traceback
                     with lock:
                         failed = Candidate(role=provider, provider=provider)
-                        store.write_stderr(provider, f"race lane crashed: {exc}")
+                        store.write_stderr(
+                            provider,
+                            f"race lane crashed: {exc}\n{traceback.format_exc()}")
                         candidates.append(failed)
 
             threads = [threading.Thread(target=run_one, args=(p,)) for p in providers]

@@ -94,14 +94,20 @@ class RaceWorkflow(unittest.TestCase):
             manifest = orch.race(["grok", "claude", "codex"], "race it", "edit")
             roles = sorted(c["role"] for c in manifest["candidates"])
             self.assertEqual(roles, ["claude", "codex", "grok"])
+            run_dir = root / ".absoloop" / "runs" / manifest["run_id"]
             for candidate in manifest["candidates"]:
-                self.assertEqual(candidate["status"], "completed", candidate["role"])
+                detail = candidate["role"]
+                if candidate["status"] != "completed":
+                    err_path = (run_dir / "candidates" / candidate["role"]
+                                / "stderr.log")
+                    if err_path.is_file():
+                        detail = f"{detail}: {err_path.read_text(encoding='utf-8')[-800:]}"
+                self.assertEqual(candidate["status"], "completed", detail)
                 self.assertTrue(candidate["gates"][0]["passed"])
             # deterministic ranking: all gates pass, so the smallest diff
             # wins ("edited by fake grok" is the shortest payload)
             self.assertEqual(manifest["selected_candidate"], "grok")
             # integration re-check ran
-            run_dir = root / ".absoloop" / "runs" / manifest["run_id"]
             self.assertTrue((run_dir / "candidates" / "integration" / "test.log").is_file())
 
     def test_race_with_all_failures_selects_none(self):
