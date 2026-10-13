@@ -17,6 +17,31 @@ def is_windows() -> bool:
     return os.name == "nt"
 
 
+_stdio_ready = False
+
+
+def ensure_stdio() -> None:
+    """Keep styled output from crashing a legacy Windows console.
+
+    GitHub's Windows runners, and many local consoles, still use a code
+    page that cannot encode the infinity mark and arrows the CLI prints.
+    ``print`` then raises ``UnicodeEncodeError`` and the process dies.
+    Replace unencodable characters instead. UTF-8 consoles are unchanged.
+    """
+    global _stdio_ready
+    if _stdio_ready:
+        return
+    _stdio_ready = True
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is None:
+            continue
+        try:
+            reconfigure(errors="replace")
+        except (OSError, ValueError):
+            continue
+
+
 def tooling_home(env: Optional[dict] = None,
                  *,
                  anchor: Optional[pathlib.Path] = None) -> pathlib.Path:
@@ -46,6 +71,42 @@ def ensure_home_on_path(home: Optional[pathlib.Path] = None) -> pathlib.Path:
         sys.path.insert(0, str(root))
     os.environ.setdefault("ABSOLOOP_HOME", str(root))
     return root
+
+
+def prepare_spawn_argv(argv: Sequence[str]) -> List[str]:
+    """Return argv CreateProcess can actually start.
+
+    Unix runs a shebang script as argv[0]. Windows CreateProcess does not:
+    a ``.py`` file or a Python shebang script raises WinError 193
+    (``%1 is not a valid Win32 application``). Those are handed to the
+    interpreter that is running Absoloop. ``.exe`` / ``.cmd`` / ``.bat``
+    provider CLIs are left alone.
+    """
+    items = list(argv)
+    if not items or not is_windows():
+        return items
+    program = items[0]
+    path = pathlib.Path(program)
+    suffix = path.suffix.lower()
+    if suffix in {".exe", ".com", ".bat", ".cmd"}:
+        return items
+    if path.name.lower() in {"python.exe", "python3.exe", "py.exe"}:
+        return items
+    if not path.is_file():
+        return items
+    is_python = suffix in {".py", ".pyw"}
+    if not is_python:
+        try:
+            with path.open("rb") as handle:
+                head = handle.read(256)
+        except OSError:
+            return items
+        if head.startswith(b"#!") and b"python" in head.split(b"\n", 1)[0].lower():
+            is_python = True
+    if not is_python:
+        return items
+    interpreter = sys.executable or "python"
+    return [interpreter, str(path), *items[1:]]
 
 
 def resolve_executable(name_or_path: str) -> Optional[str]:

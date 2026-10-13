@@ -58,6 +58,40 @@ class ResolveExecutable(unittest.TestCase):
         self.assertIsNone(pu.resolve_executable("absoloop-no-such-binary-xyz"))
 
 
+class StdioGuard(unittest.TestCase):
+    def test_ensure_stdio_replaces_unencodable_characters(self):
+        stream = mock.Mock()
+        with mock.patch.object(pu.sys, "stdout", stream), \
+             mock.patch.object(pu.sys, "stderr", stream), \
+             mock.patch.object(pu, "_stdio_ready", False):
+            pu.ensure_stdio()
+            pu.ensure_stdio()
+        stream.reconfigure.assert_called_with(errors="replace")
+        self.assertEqual(stream.reconfigure.call_count, 2)
+
+
+class SpawnArgv(unittest.TestCase):
+    def test_windows_python_script_uses_the_running_interpreter(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            script = pathlib.Path(tmp) / "fake_provider.py"
+            script.write_text("#!/usr/bin/env python3\nprint('9.9.9')\n", encoding="utf-8")
+            with mock.patch.object(pu, "is_windows", return_value=True):
+                argv = pu.prepare_spawn_argv([str(script), "--version"])
+            self.assertEqual(argv[0], sys.executable)
+            self.assertEqual(argv[1], str(script))
+            self.assertEqual(argv[2], "--version")
+
+    def test_windows_exe_is_not_rewritten(self):
+        with mock.patch.object(pu, "is_windows", return_value=True):
+            argv = pu.prepare_spawn_argv([r"C:\Tools\codex.exe", "exec"])
+        self.assertEqual(argv, [r"C:\Tools\codex.exe", "exec"])
+
+    def test_posix_argv_is_unchanged(self):
+        with mock.patch.object(pu, "is_windows", return_value=False):
+            argv = pu.prepare_spawn_argv(["/tmp/fake_provider.py", "--version"])
+        self.assertEqual(argv, ["/tmp/fake_provider.py", "--version"])
+
+
 class FuncKeyDecode(unittest.TestCase):
     def test_f13_through_f24(self):
         # xterm CSI numbers used by Micro defaults

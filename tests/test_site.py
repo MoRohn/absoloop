@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import os
 import re
+import shutil
 import subprocess
 import unittest
 from pathlib import Path
@@ -85,12 +87,30 @@ class SiteTests(unittest.TestCase):
         self.assertIn("/srv/sites/absoloop.ai", DEPLOY)
         self.assertIn("docker exec caddy caddy reload --config /etc/caddy/Caddyfile", DEPLOY)
         self.assertIn("/srv/caddy/Caddyfile", WORKFLOW)
+        self.assertIn("github.event.repository.default_branch", WORKFLOW)
+        self.assertIn("Deploy skipped", WORKFLOW)
+        self.assertIn("Nothing was deployed", WORKFLOW)
         self.assertNotIn("WEB1_CADDY_BIN", WORKFLOW)
         self.assertNotIn("/var/www/absoloop", DEPLOY)
         self.assertNotIn("2.29.59.0", DEPLOY)
         self.assertNotIn("amazonaws.com", WORKFLOW.lower())
         self.assertNotRegex(WORKFLOW, r"(?im)^\s*(run:|uses:).*(cloudfront|aws\s+s3|s3\s+sync)")
-        subprocess.check_call(["bash", "-n", str(ROOT / "deploy" / "deploy.sh")])
+        subprocess.check_call([_bash_exe(), "-n", str(ROOT / "deploy" / "deploy.sh")])
+
+
+def _bash_exe() -> str:
+    """Git for Windows ships a real bash. System32\\bash.exe is a WSL stub."""
+    if os.name == "nt":
+        for candidate in (
+            r"C:\Program Files\Git\bin\bash.exe",
+            r"C:\Program Files\Git\usr\bin\bash.exe",
+        ):
+            if os.path.isfile(candidate):
+                return candidate
+        found = shutil.which("bash")
+        if found and "system32" not in found.replace("\\", "/").lower():
+            return found
+    return "bash"
 
 
 if __name__ == "__main__":

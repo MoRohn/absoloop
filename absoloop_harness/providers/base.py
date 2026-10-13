@@ -108,10 +108,12 @@ class ProviderAdapter:
             problems=problems)
 
     def _version(self, path: str) -> str:
+        from ..platform_util import prepare_spawn_argv
         for args in _VERSION_ARGV:
             try:
                 result = subprocess.run(
-                    [path, *args], capture_output=True, text=True, timeout=15,
+                    prepare_spawn_argv([path, *args]),
+                    capture_output=True, text=True, timeout=15,
                     stdin=subprocess.DEVNULL)
             except (OSError, subprocess.TimeoutExpired):
                 continue

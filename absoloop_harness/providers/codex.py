@@ -83,9 +83,10 @@ class CodexAdapter(ProviderAdapter):
             return configured
         if not path:
             return "exec-resume"
+        from ..platform_util import prepare_spawn_argv
         try:
             result = subprocess.run(
-                [path, "exec", "resume", "--help"],
+                prepare_spawn_argv([path, "exec", "resume", "--help"]),
                 capture_output=True, text=True, timeout=15,
                 stdin=subprocess.DEVNULL)
         except (OSError, subprocess.TimeoutExpired):
@@ -104,10 +105,12 @@ class CodexAdapter(ProviderAdapter):
         version = super()._version(path)
         if version and version.lower() not in ("codex", "codex-cli", "unknown"):
             return version
+        from ..platform_util import prepare_spawn_argv
         for args in (["version"], ["exec", "--version"], ["--help"]):
             try:
                 result = subprocess.run(
-                    [path, *args], capture_output=True, text=True, timeout=15,
+                    prepare_spawn_argv([path, *args]),
+                    capture_output=True, text=True, timeout=15,
                     stdin=subprocess.DEVNULL)
             except (OSError, subprocess.TimeoutExpired):
                 continue

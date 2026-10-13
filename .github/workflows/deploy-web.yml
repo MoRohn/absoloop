@@ -19,7 +19,7 @@ on:
         type: boolean
         default: false
   push:
-    branches: [main]
+    branches: [main, master]
     paths:
       - "site/**"
       - "deploy/**"
@@ -36,11 +36,30 @@ jobs:
   deploy:
     name: rsync to web-1
     runs-on: ubuntu-latest
+    # Push filters above are a shortcut. This is the real gate: never deploy
+    # a feature branch, including a manual run checked out from one.
+    if: github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
     steps:
+      - name: Check deploy secrets
+        id: gate
+        env:
+          WEB1_HOST: ${{ secrets.WEB1_HOST }}
+          WEB1_USER: ${{ secrets.WEB1_USER }}
+          WEB1_SSH_KEY: ${{ secrets.WEB1_SSH_KEY }}
+        run: |
+          if [ -z "${WEB1_HOST}" ] || [ -z "${WEB1_USER}" ] || [ -z "${WEB1_SSH_KEY}" ]; then
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            echo "::notice title=Deploy skipped::Repository secrets WEB1_HOST, WEB1_USER, and WEB1_SSH_KEY are not set. Add them to rsync site/ to web-1. Nothing was deployed."
+          else
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Check out
+        if: steps.gate.outputs.ready == 'true'
         uses: actions/checkout@v4
 
       - name: Rsync site and optionally reload Caddy
+        if: steps.gate.outputs.ready == 'true'
         env:
           WEB1_HOST: ${{ secrets.WEB1_HOST }}
           WEB1_USER: ${{ secrets.WEB1_USER }}

@@ -36,6 +36,9 @@ _BLUE = "\x1b[38;2;0;105;255m"
 
 
 def tint(style: str, text: str) -> str:
+    # First styled print arms stdout so a cp1252 console cannot kill the CLI.
+    from .platform_util import ensure_stdio
+    ensure_stdio()
     if not _USE_COLOR:
         return text
     codes = {

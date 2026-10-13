@@ -113,8 +113,10 @@ class SupervisedProcess:
         else:
             popen_kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
         self._started_at = time.time()
+        from .platform_util import prepare_spawn_argv
+        spawn_argv = prepare_spawn_argv(self.argv)
         self._proc = subprocess.Popen(
-            self.argv, cwd=self.cwd, env=self.env,
+            spawn_argv, cwd=self.cwd, env=self.env,
             text=True, encoding="utf-8", errors="replace",
             stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             stdin=subprocess.PIPE if self.stdin_text is not None else subprocess.DEVNULL,
