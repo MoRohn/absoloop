@@ -1,0 +1,15 @@
+# Reference site block for the shared Caddyfile on web-1.
+#
+# Host file:  /srv/caddy/Caddyfile
+# In container `caddy` (image caddy:2): /etc/caddy/Caddyfile
+# Sites dir:  /srv/sites  (read-only inside the container at /srv/sites)
+#
+# This block already sits next to diony.ai. Paste it by hand only if it is
+# missing. Deploy never copies this file and never overwrites
+# /srv/caddy/Caddyfile. Both names serve the same directory.
+
+absoloop.ai, www.absoloop.ai {
+	root * /srv/sites/absoloop.ai
+	encode zstd gzip
+	file_server
+}

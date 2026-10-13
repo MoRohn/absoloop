@@ -1,0 +1,53 @@
+# Deploy the static site to the Hetzner VPS web-1.
+#
+# Caddy runs in Docker (container `caddy`, image caddy:2). This workflow
+# rsyncs site/ to /srv/sites/absoloop.ai on the host. It does not upload or
+# edit /srv/caddy/Caddyfile (shared with diony.ai and other sites).
+#
+# absoloop.ai used to be a hand-uploaded Amazon S3 bucket in front of
+# CloudFront. This repository never contained a CloudFront or S3 workflow
+# (CI is tests only). That AWS path is not reproduced here. Do not add AWS
+# keys. See DEPLOY.md for the cutover.
+
+name: Deploy website
+
+on:
+  workflow_dispatch:
+    inputs:
+      reload_caddy:
+        description: Reload the Docker Caddy container. Only after a hand edit of /srv/caddy/Caddyfile. Does not upload that file.
+        type: boolean
+        default: false
+  push:
+    branches: [main]
+    paths:
+      - "site/**"
+      - "deploy/**"
+      - ".github/workflows/deploy-web.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-web
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: rsync to web-1
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Rsync site and optionally reload Caddy
+        env:
+          WEB1_HOST: ${{ secrets.WEB1_HOST }}
+          WEB1_USER: ${{ secrets.WEB1_USER }}
+          WEB1_SSH_KEY: ${{ secrets.WEB1_SSH_KEY }}
+          WEB1_KNOWN_HOSTS: ${{ secrets.WEB1_KNOWN_HOSTS }}
+          WEB1_WEB_ROOT: ${{ vars.WEB1_WEB_ROOT }}
+          WEB1_PORT: ${{ vars.WEB1_PORT }}
+          WEB1_CADDY_RELOAD: ${{ vars.WEB1_CADDY_RELOAD }}
+          WEB1_CADDY_RELOAD_INPUT: ${{ github.event_name == 'workflow_dispatch' && inputs.reload_caddy || '' }}
+        run: bash deploy/deploy.sh
