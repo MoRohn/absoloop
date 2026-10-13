@@ -208,17 +208,21 @@ class SupervisedProcess:
                 os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
             else:
                 # Provider CLIs spawn grandchildren; terminate the whole tree.
-                from .platform_util import kill_process_tree
-                if not kill_process_tree(proc.pid):
-                    proc.terminate()
-                for _ in range(20):
-                    if proc.poll() is not None:
-                        return
-                    time.sleep(0.1)
-                try:
-                    proc.kill()
-                except OSError:
-                    pass
+                # Stay inside child_teardown until the process is actually
+                # gone: Windows can deliver CTRL_C_EVENT after taskkill
+                # returns, and proc.kill() can deliver another.
+                from .platform_util import child_teardown, kill_process_tree
+                with child_teardown():
+                    if not kill_process_tree(proc.pid):
+                        proc.terminate()
+                    for _ in range(20):
+                        if proc.poll() is not None:
+                            return
+                        time.sleep(0.1)
+                    try:
+                        proc.kill()
+                    except OSError:
+                        pass
         except (ProcessLookupError, PermissionError, OSError):
             try:
                 proc.kill()

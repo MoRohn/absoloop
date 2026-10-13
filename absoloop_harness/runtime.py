@@ -252,8 +252,14 @@ def cancel_run(run_dir: pathlib.Path) -> Dict[str, Any]:
     if isinstance(orch_pid, int) and orch_pid != os.getpid() and pid_alive(orch_pid):
         # Soft-stop the orchestrator after children: it should observe the
         # cancelled children and finalize; if it is stuck, SIGTERM it.
+        # On Windows that TerminateProcess can still signal this console.
         try:
-            os.kill(orch_pid, signal.SIGTERM)
+            if os.name == "nt":
+                from .platform_util import child_teardown
+                with child_teardown():
+                    os.kill(orch_pid, signal.SIGTERM)
+            else:
+                os.kill(orch_pid, signal.SIGTERM)
             orch_killed = True
         except OSError:
             pass

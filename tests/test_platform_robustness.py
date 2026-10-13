@@ -4,7 +4,6 @@ from __future__ import annotations
 import io
 import os
 import pathlib
-import subprocess
 import sys
 import tempfile
 import unittest
@@ -72,6 +71,10 @@ class StdioGuard(unittest.TestCase):
 
 
 class KillTree(unittest.TestCase):
+    def tearDown(self):
+        pu._child_teardown_depth = 0
+        pu._child_teardown_until = 0.0
+
     def test_windows_taskkill_does_not_attach_a_console(self):
         completed = mock.Mock(returncode=0)
         with mock.patch.object(pu, "is_windows", return_value=True), \
@@ -80,7 +83,44 @@ class KillTree(unittest.TestCase):
         args = run.call_args.args[0]
         self.assertEqual(args[:5], ["taskkill", "/PID", "4321", "/T", "/F"])
         flags = run.call_args.kwargs.get("creationflags", 0)
-        self.assertTrue(flags & subprocess.CREATE_NO_WINDOW)
+        # Win32 values. subprocess.CREATE_NO_WINDOW does not exist on Linux,
+        # and this test forces the Windows branch there.
+        self.assertTrue(flags & 0x08000000)  # CREATE_NO_WINDOW
+        self.assertTrue(flags & 0x00000008)  # DETACHED_PROCESS
+        # The kill also arms the console swallow, so a late CTRL_C_EVENT
+        # cannot become KeyboardInterrupt on the main thread.
+        self.assertTrue(pu.ctrl_event_should_swallow(0))
+
+
+class ChildTeardownCtrl(unittest.TestCase):
+    def tearDown(self):
+        pu._child_teardown_depth = 0
+        pu._child_teardown_until = 0.0
+
+    def test_swallows_ctrl_c_and_break_only_during_teardown(self):
+        self.assertFalse(pu.ctrl_event_should_swallow(0))
+        self.assertFalse(pu.ctrl_event_should_swallow(1))
+        with pu.child_teardown():
+            self.assertTrue(pu.ctrl_event_should_swallow(0))
+            self.assertTrue(pu.ctrl_event_should_swallow(1))
+            # Close, logoff, and shutdown must still reach the process.
+            self.assertFalse(pu.ctrl_event_should_swallow(2))
+            self.assertFalse(pu.ctrl_event_should_swallow(5))
+            self.assertFalse(pu.ctrl_event_should_swallow(6))
+        self.assertTrue(pu.ctrl_event_should_swallow(0))
+        later = pu._child_teardown_until + 0.01
+        with mock.patch.object(pu.time, "monotonic", return_value=later):
+            self.assertFalse(pu.ctrl_event_should_swallow(0))
+            self.assertFalse(pu.ctrl_event_should_swallow(1))
+
+    def test_nested_teardown_stays_active_until_the_outer_exit(self):
+        with pu.child_teardown():
+            with pu.child_teardown():
+                self.assertEqual(pu._child_teardown_depth, 2)
+                self.assertTrue(pu.ctrl_event_should_swallow(0))
+            self.assertEqual(pu._child_teardown_depth, 1)
+            self.assertTrue(pu.ctrl_event_should_swallow(0))
+        self.assertEqual(pu._child_teardown_depth, 0)
 
 
 class SpawnArgv(unittest.TestCase):

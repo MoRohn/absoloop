@@ -10,7 +10,9 @@ import pathlib
 import shutil
 import subprocess
 import sys
-from typing import List, Optional, Sequence
+import time
+from contextlib import contextmanager
+from typing import Iterator, List, Optional, Sequence
 
 
 def is_windows() -> bool:
@@ -135,6 +137,90 @@ def resolve_executable(name_or_path: str) -> Optional[str]:
     return None
 
 
+# Win32 CreateProcess flags. CPython only defines these on Windows; the
+# numeric values are the contract the taskkill tests assert on every OS.
+_CREATE_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
+_DETACHED_PROCESS = getattr(subprocess, "DETACHED_PROCESS", 0x00000008)
+
+# Console control events. Close / logoff / shutdown must still reach Python.
+_CTRL_C_EVENT = 0
+_CTRL_BREAK_EVENT = 1
+_CHILD_TEARDOWN_QUIET_SECONDS = 5.0
+_child_teardown_depth = 0
+_child_teardown_until = 0.0
+_ctrl_handler_installed = False
+_ctrl_handler_ref = None  # keep the WINFUNCTYPE alive; Windows calls it later
+
+
+def ctrl_event_should_swallow(ctrl_type: int) -> bool:
+    """True only for Ctrl+C / Ctrl+Break raised by a child-tree kill.
+
+    A real operator Ctrl+C still becomes KeyboardInterrupt once the kill
+    and its short quiet period are over. Closing the console is never
+    swallowed.
+    """
+    if int(ctrl_type) not in (_CTRL_C_EVENT, _CTRL_BREAK_EVENT):
+        return False
+    if _child_teardown_depth > 0:
+        return True
+    return time.monotonic() < _child_teardown_until
+
+
+def _install_console_ctrl_handler() -> None:
+    """Install one handler that runs ahead of Python's.
+
+    Last registered is called first. Returning TRUE stops the chain, so
+    Python does not turn the event into KeyboardInterrupt. Returning FALSE
+    leaves the CLI's Ctrl+C abort alone. ``os.name`` is checked on purpose:
+    unit tests patch ``is_windows`` on Linux and must not load kernel32.
+    """
+    global _ctrl_handler_installed, _ctrl_handler_ref
+    if _ctrl_handler_installed or os.name != "nt":
+        return
+    import ctypes
+    from ctypes import wintypes
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    routine = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.DWORD)
+
+    def _on_console_ctrl(ctrl_type: int) -> int:
+        try:
+            return 1 if ctrl_event_should_swallow(int(ctrl_type)) else 0
+        except Exception:
+            return 0
+
+    callback = routine(_on_console_ctrl)
+    kernel32.SetConsoleCtrlHandler.argtypes = [routine, wintypes.BOOL]
+    kernel32.SetConsoleCtrlHandler.restype = wintypes.BOOL
+    if not kernel32.SetConsoleCtrlHandler(callback, True):
+        return
+    _ctrl_handler_ref = callback
+    _ctrl_handler_installed = True
+
+
+@contextmanager
+def child_teardown() -> Iterator[None]:
+    """Hold off spurious console Ctrl+C while a child tree is destroyed.
+
+    On Windows, killing a console child delivers CTRL_C_EVENT or
+    CTRL_BREAK_EVENT to every process that shares the console, including
+    the parent. Python raises KeyboardInterrupt on the main thread at the
+    next blocking call — often ``Thread.join``, after ``taskkill`` has
+    already returned. CREATE_NO_WINDOW does not stop that. The handler
+    swallows only for this block plus a few seconds, which is long enough
+    for the late event and short enough that a real Ctrl+C still aborts.
+    """
+    global _child_teardown_depth, _child_teardown_until
+    _install_console_ctrl_handler()
+    _child_teardown_depth += 1
+    try:
+        yield
+    finally:
+        _child_teardown_depth = max(0, _child_teardown_depth - 1)
+        if _child_teardown_depth == 0:
+            _child_teardown_until = time.monotonic() + _CHILD_TEARDOWN_QUIET_SECONDS
+
+
 def kill_process_tree(pid: int) -> bool:
     """Best-effort terminate of a process and its descendants.
 
@@ -144,23 +230,22 @@ def kill_process_tree(pid: int) -> bool:
     if pid <= 0:
         return False
     if is_windows():
-        try:
-            # taskkill is a console program. Attached to this console it can
-            # deliver CTRL_C_EVENT to the parent (KeyboardInterrupt) when it
-            # tears down a child tree. CREATE_NO_WINDOW keeps that event off
-            # the CLI and the test runner.
-            result = subprocess.run(
-                ["taskkill", "/PID", str(pid), "/T", "/F"],
-                capture_output=True, text=True, timeout=20, check=False,
-                creationflags=subprocess.CREATE_NO_WINDOW)
-            # 0 = killed, 128 = not found (already gone) — both OK for cancel.
-            return result.returncode in (0, 128)
-        except (OSError, subprocess.TimeoutExpired):
+        # Detach taskkill so it does not join this console, and arm the
+        # ctrl handler for the event Windows still delivers on child death.
+        with child_teardown():
             try:
-                os.kill(pid, 15)  # SIGTERM equivalent via Python on Windows
-                return True
-            except OSError:
-                return False
+                result = subprocess.run(
+                    ["taskkill", "/PID", str(pid), "/T", "/F"],
+                    capture_output=True, text=True, timeout=20, check=False,
+                    creationflags=_CREATE_NO_WINDOW | _DETACHED_PROCESS)
+                # 0 = killed, 128 = not found (already gone) — both OK for cancel.
+                return result.returncode in (0, 128)
+            except (OSError, subprocess.TimeoutExpired):
+                try:
+                    os.kill(pid, 15)  # SIGTERM equivalent via Python on Windows
+                    return True
+                except OSError:
+                    return False
     try:
         os.kill(pid, 15)
         return True
