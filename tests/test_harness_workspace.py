@@ -1,16 +1,19 @@
 """Worktree isolation, patch export/apply, manifests, and run pruning."""
 from __future__ import annotations
 
+import json
 import pathlib
 import subprocess
 import sys
 import tempfile
+import threading
 import unittest
 from unittest import mock
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
 from absoloop_harness import workspace as ws
+from absoloop_harness.core import AgentEvent, EventType
 from absoloop_harness.workspace import (RunStore, WorkspaceError, list_runs,
                                         prune_runs)
 
@@ -114,6 +117,29 @@ class Manifests(unittest.TestCase):
             self.assertEqual(manifest["strategy"], "single")
             self.assertEqual(manifest["run_id"], "20260101-000000-aaa")
             self.assertIn("20260101-000000-aaa", list_runs(root))
+
+    def test_parallel_event_appends_stay_one_json_object_per_line(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            store = RunStore(root, "run-events")
+
+            def write(lane: int) -> None:
+                for n in range(25):
+                    store.append_event(AgentEvent(
+                        type=EventType.TEXT_DELTA, provider="p",
+                        text=f"{lane}-{n}"))
+
+            threads = [threading.Thread(target=write, args=(i,)) for i in range(4)]
+            for thread in threads:
+                thread.start()
+            for thread in threads:
+                thread.join()
+            lines = (store.run_dir / "events.jsonl").read_text(encoding="utf-8").splitlines()
+            self.assertEqual(len(lines), 100)
+            texts = []
+            for line in lines:
+                texts.append(json.loads(line)["text"])
+            self.assertEqual(len(texts), len(set(texts)))
 
     def test_prune_keeps_newest(self):
         with tempfile.TemporaryDirectory() as tmp:

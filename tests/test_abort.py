@@ -100,6 +100,12 @@ class AbortCommandTests(unittest.TestCase):
                 (project / ".absoloop" / "state.json").read_text(encoding="utf-8"))
             self.assertEqual(state["status"], "STOPPED")
 
+    @unittest.skipIf(
+        os.name == "nt",
+        "POSIX-only: os.getpgid and os.killpg do not exist on Windows. "
+        "terminate_mission_pid uses kill_process_tree there and never "
+        "signals a process group, so this shell-group guard is not reachable.",
+    )
     def test_terminate_skips_killpg_when_not_group_leader(self):
         """Never SIGTERM the operator's shell process group."""
         with mock.patch.object(cli, "pid_alive", side_effect=[True, False]), \

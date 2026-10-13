@@ -169,6 +169,10 @@ def _iso(ts: Any) -> str:
 def _pid_alive(pid: Any) -> bool:
     if not isinstance(pid, int) or pid <= 0:
         return False
+    if os.name == "nt":
+        # os.kill(pid, 0) broadcasts CTRL_C_EVENT to this console.
+        from .platform_util import windows_pid_alive
+        return windows_pid_alive(pid)
     try:
         os.kill(pid, 0)
         return True

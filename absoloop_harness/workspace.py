@@ -15,6 +15,7 @@ import os
 import pathlib
 import shutil
 import subprocess
+import threading
 import time
 from typing import Any, Dict, List, Optional
 
@@ -25,16 +26,24 @@ class WorkspaceError(Exception):
     pass
 
 
+# Race and council lanes call git on sibling worktrees at once. Those
+# worktrees share one .git directory, and a second `git add` can fail
+# with index.lock still held. One lock for every git invocation in this
+# process; calls do not nest while the lock is held.
+_git_lock = threading.Lock()
+
+
 def _git(repo: pathlib.Path, *args: str, check: bool = True) -> subprocess.CompletedProcess:
     kwargs: Dict[str, Any] = {}
     if os.name == "nt":
         # git.exe shares the parent console by default. A fatal worktree
         # error, or tearing that process down, delivers CTRL_C_EVENT to
         # this console. Detach it so the suite is not KeyboardInterrupt'd.
-        from .platform_util import windows_child_creationflags
-        kwargs["creationflags"] = windows_child_creationflags()
-    result = subprocess.run(["git", "-C", str(repo), *args],
-                            capture_output=True, text=True, **kwargs)
+        from .platform_util import windows_detached_creationflags
+        kwargs["creationflags"] = windows_detached_creationflags()
+    with _git_lock:
+        result = subprocess.run(["git", "-C", str(repo), *args],
+                                capture_output=True, text=True, **kwargs)
     if check and result.returncode != 0:
         raise WorkspaceError(f"git {' '.join(args)} failed: {result.stderr.strip()}")
     return result
@@ -113,6 +122,7 @@ class RunStore:
         self.run_dir.mkdir(parents=True, exist_ok=True)
         (self.run_dir / "candidates").mkdir(exist_ok=True)
         self._events_path = self.run_dir / "events.jsonl"
+        self._events_lock = threading.Lock()
         self._worktrees: Dict[str, pathlib.Path] = {}
 
     # -- worktrees ------------------------------------------------------------
@@ -212,8 +222,14 @@ class RunStore:
         return path
 
     def append_event(self, event: AgentEvent) -> None:
-        with self._events_path.open("a", encoding="utf-8") as handle:
-            handle.write(json.dumps(event.to_json(), ensure_ascii=False) + "\n")
+        # Parallel race lanes share this file. On Windows, Python 3.9 opens
+        # it without sharing, so a second lane's append raises
+        # PermissionError. That exception used to be swallowed as a
+        # candidate with status not_run.
+        line = json.dumps(event.to_json(), ensure_ascii=False) + "\n"
+        with self._events_lock:
+            with self._events_path.open("a", encoding="utf-8") as handle:
+                handle.write(line)
 
     def write_candidate_result(self, role: str, result: RunResult) -> None:
         path = self.candidate_dir(role) / "final.json"
