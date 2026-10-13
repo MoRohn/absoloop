@@ -512,6 +512,35 @@ h3 {
   overflow-wrap: anywhere;
 }
 
+.showcase {
+  width: min(90rem, calc(100vw - (var(--space) * 2)));
+  margin: 0;
+  margin-left: 50%;
+  transform: translateX(-50%);
+}
+
+.showcase-frame {
+  overflow-x: auto;
+  border: 1px solid var(--line);
+  background: #010409;
+  scrollbar-color: rgba(231, 238, 244, 0.35) transparent;
+}
+
+.showcase-frame img {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+.showcase figcaption {
+  margin-top: 0.8rem;
+  color: var(--mute);
+  font-family: var(--mono);
+  font-size: 0.75rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
 .start-grid {
   display: grid;
   grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr);
@@ -660,6 +689,17 @@ h3 {
     width: 100%;
     margin-left: 0;
     justify-content: space-between;
+    gap: 0.45rem;
+  }
+
+  .nav a {
+    font-size: 0.68rem;
+    letter-spacing: 0.02em;
+  }
+
+  .showcase-frame img {
+    width: 920px;
+    max-width: none;
   }
 
   .hero {
