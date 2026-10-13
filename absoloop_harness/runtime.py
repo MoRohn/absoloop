@@ -228,6 +228,12 @@ def cancel_run(run_dir: pathlib.Path) -> Dict[str, Any]:
                 "message": f"run already finished with status {status!r}",
                 "status": status}
 
+    if os.name == "nt":
+        # Cover the caller's Thread.join. The spurious SIGINT is raised
+        # when that join reacquires the GIL, after this function returns.
+        from .platform_util import shield_console_interrupt
+        shield_console_interrupt(8.0)
+
     request_cancel(run_dir)
     killed: List[Dict[str, Any]] = []
     for child in live.get("children", []):
@@ -270,9 +276,11 @@ def cancel_run(run_dir: pathlib.Path) -> Dict[str, Any]:
     live["children"] = []
     write_live(run_dir, live)
     if os.name == "nt":
-        # A child that shared the console may already have tripped the
-        # sigint event. Clear it before the caller blocks in Thread.join.
-        from .platform_util import clear_spurious_keyboard_interrupt
+        # Refresh the window so it starts when the caller is about to join,
+        # and drop a SIGINT a child already tripped.
+        from .platform_util import (
+            clear_spurious_keyboard_interrupt, shield_console_interrupt)
+        shield_console_interrupt(8.0)
         clear_spurious_keyboard_interrupt()
     return {
         "ok": True,

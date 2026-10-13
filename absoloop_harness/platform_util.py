@@ -8,6 +8,7 @@ from __future__ import annotations
 import os
 import pathlib
 import shutil
+import signal
 import subprocess
 import sys
 import threading
@@ -267,6 +268,188 @@ def _schedule_restore_ctrl_c(delay_seconds: float) -> None:
     timer.start()
 
 
+# SIG_IGN as a C function pointer. PyOS_setsig takes the same value the
+# C runtime uses; 1 is SIG_IGN on Windows and on POSIX.
+_SIG_IGN_PTR = 1
+_sigint_ignore_until = 0.0
+_c_sigint_prev = None
+_c_sigbreak_prev = None
+_sigint_py_saved = None
+_sigbreak_py_saved = None
+_pending_restore_ref = None
+_restore_timer = None
+
+
+def _pyos_setsig(signum: int, handler):
+    """Set the C signal disposition. Works from any thread.
+
+    ``signal.signal`` refuses non-main threads, but the spurious SIGINT
+    arrives while the main thread is blocked in ``Thread.join``.
+    """
+    import ctypes
+
+    py = ctypes.pythonapi
+    py.PyOS_setsig.argtypes = [ctypes.c_int, ctypes.c_void_p]
+    py.PyOS_setsig.restype = ctypes.c_void_p
+    pointer = handler if isinstance(handler, ctypes.c_void_p) else ctypes.c_void_p(handler)
+    return py.PyOS_setsig(int(signum), pointer)
+
+
+def _install_sigint_ignore() -> None:
+    """Point SIGINT/SIGBREAK at SIG_IGN until :func:`_restore_sigint_ignore`."""
+    global _c_sigint_prev, _c_sigbreak_prev, _sigint_py_saved, _sigbreak_py_saved
+    if _c_sigint_prev is None:
+        try:
+            _c_sigint_prev = _pyos_setsig(signal.SIGINT, _SIG_IGN_PTR)
+        except (AttributeError, OSError, TypeError):
+            _c_sigint_prev = None
+        sigbreak = getattr(signal, "SIGBREAK", None)
+        if sigbreak is not None:
+            try:
+                _c_sigbreak_prev = _pyos_setsig(sigbreak, _SIG_IGN_PTR)
+            except (AttributeError, OSError, TypeError):
+                _c_sigbreak_prev = None
+    if threading.current_thread() is not threading.main_thread():
+        return
+    if _sigint_py_saved is None:
+        try:
+            _sigint_py_saved = signal.getsignal(signal.SIGINT)
+            signal.signal(signal.SIGINT, signal.SIG_IGN)
+        except (OSError, ValueError, TypeError):
+            _sigint_py_saved = None
+        sigbreak = getattr(signal, "SIGBREAK", None)
+        if sigbreak is not None and _sigbreak_py_saved is None:
+            try:
+                _sigbreak_py_saved = signal.getsignal(sigbreak)
+                signal.signal(sigbreak, signal.SIG_IGN)
+            except (OSError, ValueError, TypeError):
+                _sigbreak_py_saved = None
+
+
+def _drain_pending_keyboard_interrupt() -> None:
+    """Drop a SIGINT that was already tripped, without aborting the caller."""
+    if threading.current_thread() is not threading.main_thread():
+        return
+    try:
+        import ctypes
+
+        py = ctypes.pythonapi
+        py.PyErr_CheckSignals.argtypes = []
+        py.PyErr_CheckSignals.restype = ctypes.c_int
+        py.PyErr_ExceptionMatches.argtypes = [ctypes.py_object]
+        py.PyErr_ExceptionMatches.restype = ctypes.c_int
+        py.PyErr_Clear.argtypes = []
+        py.PyErr_Clear.restype = None
+        if py.PyErr_CheckSignals() < 0 and py.PyErr_ExceptionMatches(KeyboardInterrupt):
+            py.PyErr_Clear()
+    except Exception:
+        return
+
+
+def _restore_python_sigint_handlers() -> None:
+    global _sigint_py_saved, _sigbreak_py_saved, _c_sigint_prev, _c_sigbreak_prev
+    saved_int = _sigint_py_saved
+    saved_break = _sigbreak_py_saved
+    c_int = _c_sigint_prev
+    c_break = _c_sigbreak_prev
+    _sigint_py_saved = None
+    _sigbreak_py_saved = None
+    _c_sigint_prev = None
+    _c_sigbreak_prev = None
+    if threading.current_thread() is threading.main_thread():
+        try:
+            if saved_int is not None:
+                signal.signal(signal.SIGINT, saved_int)
+            sigbreak = getattr(signal, "SIGBREAK", None)
+            if sigbreak is not None and saved_break is not None:
+                signal.signal(sigbreak, saved_break)
+            return
+        except (OSError, ValueError, TypeError):
+            pass
+    if c_int is not None:
+        try:
+            _pyos_setsig(signal.SIGINT, c_int)
+        except (AttributeError, OSError, TypeError):
+            pass
+    sigbreak = getattr(signal, "SIGBREAK", None)
+    if sigbreak is not None and c_break is not None:
+        try:
+            _pyos_setsig(sigbreak, c_break)
+        except (AttributeError, OSError, TypeError):
+            pass
+
+
+def _queue_sigint_restore() -> None:
+    """Run the restore on the main thread once it is back in the eval loop.
+
+    ``Thread.join`` holds the GIL released inside ``lock.acquire``. A
+    pending call is delivered when that acquire finishes, which is after
+    the window where the spurious SIGINT would have been raised.
+    """
+    global _pending_restore_ref
+    try:
+        import ctypes
+
+        routine = ctypes.CFUNCTYPE(ctypes.c_int, ctypes.c_void_p)
+
+        def _on_pending(_arg) -> int:
+            try:
+                _restore_python_sigint_handlers()
+            except Exception:
+                return 0
+            return 0
+
+        callback = routine(_on_pending)
+        _pending_restore_ref = callback
+        py = ctypes.pythonapi
+        py.Py_AddPendingCall.argtypes = [routine, ctypes.c_void_p]
+        py.Py_AddPendingCall.restype = ctypes.c_int
+        if py.Py_AddPendingCall(callback, None) == 0:
+            return
+    except Exception:
+        pass
+    if threading.current_thread() is threading.main_thread():
+        _restore_python_sigint_handlers()
+
+
+def _restore_sigint_if_due() -> None:
+    if time.monotonic() < _sigint_ignore_until:
+        _arm_sigint_restore_timer()
+        return
+    if threading.current_thread() is threading.main_thread():
+        _restore_python_sigint_handlers()
+    else:
+        _queue_sigint_restore()
+
+
+def _arm_sigint_restore_timer() -> None:
+    global _restore_timer
+    delay = max(0.05, _sigint_ignore_until - time.monotonic())
+    timer = threading.Timer(delay, _restore_sigint_if_due)
+    timer.daemon = True
+    timer.start()
+    _restore_timer = timer
+
+
+def shield_console_interrupt(seconds: float = 8.0) -> None:
+    """Ignore SIGINT for ``seconds`` so a dying child cannot abort us.
+
+    On Windows, ``Thread.join`` acquires its lock with the GIL released.
+    That acquire is not itself interruptible, but taking the GIL back
+    runs the pending SIGINT handler and raises ``KeyboardInterrupt``.
+    The handler has to be ``SIG_IGN`` for the whole wait, not only for
+    the ``taskkill`` call. A real Ctrl+C works again once the window
+    ends. No-op off Windows.
+    """
+    global _sigint_ignore_until
+    if os.name != "nt":
+        return
+    _sigint_ignore_until = max(_sigint_ignore_until, time.monotonic() + max(0.0, seconds))
+    _install_sigint_ignore()
+    _drain_pending_keyboard_interrupt()
+    _arm_sigint_restore_timer()
+
+
 def clear_spurious_keyboard_interrupt() -> None:
     """Reset Python's manual-reset sigint event if a child already tripped it.
 
@@ -318,6 +501,9 @@ def child_teardown(quiet_seconds: float = _CHILD_TEARDOWN_QUIET_SECONDS) -> Iter
     global _child_teardown_depth, _child_teardown_until
     _install_console_ctrl_handler()
     _set_ignore_ctrl_c(True)
+    # SIG_IGN has to outlast this block: the main thread raises
+    # KeyboardInterrupt when it next reacquires the GIL, often in join.
+    shield_console_interrupt(quiet_seconds)
     _child_teardown_depth += 1
     try:
         yield
